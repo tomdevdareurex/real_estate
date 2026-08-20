@@ -1,0 +1,52 @@
+fields:
+  "Plotas": total_area_sqm
+  "Gyvenamasis plotas": living_area_sqm
+  "Naudingas plotas": usable_area_sqm
+  "Rūsio plotas": basement_area_sqm
+  "Garažo plotas": garage_area_sqm
+  "Sklypo plotas": plot_area
+  "Kambarių sk.": rooms
+  "Miegamųjų sk.": bedrooms
+  "Vonios kambarių sk.": bathrooms
+  "Aukštas": floor
+  "Aukštų sk.": total_floors
+  "Metai": construction_year
+  "Renovacijos metai": renovation_year
+  "Baigtumas": completion_percent
+  "Pastato tipas": building_type
+  "Namo tipas": house_type
+  "Šildymas": heating_type
+  "Vanduo": water_supply
+  "Kanalizacija": sewerage
+  "Elektra": electricity
+  "Dujos": gas
+  "Įrengimas": condition
+  "Buto numeris": apartment_number
+  "Pastato energijos suvartojimo klasė": energy_class
+  "Paskirtis": ownership_type
+categories:
+  building_type:
+    "Mūrinis": brick
+    "Blokinis": concrete_block
+    "Monolitinis": monolithic
+    "Medinis": wood
+  condition:
+    "Įrengtas": fully_finished
+    "Dalinė apdaila": partially_finished
+    "Neįrengtas": unfinished
+    "Reikalingas remontas": renovation_required
+  house_type:
+    "Namas (gyvenamasis)": detached_house
+    "Sublokuotas namas": terraced_house
+    "Kotedžas": townhouse
+features:
+  "Balkonas": balcony
+  "Terasa": terrace
+  "Rūsys": basement
+  "Sandėliukas": storage
+  "Liftas": lift
+  "Garažas": garage
+  "Aptverta teritorija": fenced_area
+  "Signalizacija": alarm
+  "Vaizdo kameros": security_cameras
+  "Asfaltuotas privažiavimas": paved_access

@@ -1,0 +1,1 @@
+"""Record and coordinate validation."""

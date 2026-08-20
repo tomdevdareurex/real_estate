@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/Scripts/python.exe -m pytest *)",
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m pytest *)",
+      "Bash(.venv/Scripts/python.exe -m mypy *)",
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m mypy *)",
+      "Bash(.venv/Scripts/python.exe -m black *)",
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m black *)",
+      "Bash(.venv/Scripts/python.exe -m isort *)",
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m isort *)",
+      "Bash(.venv/Scripts/python.exe -m bandit *)",
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m bandit *)",
+      "Bash(.venv/Scripts/python.exe -m ruff *)",
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m ruff *)",
+      "Bash(.venv/Scripts/python.exe -m aruodas_scraper show-config *)",
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m aruodas_scraper show-config *)",
+      "Bash(.venv/Scripts/python.exe -m aruodas_scraper doctor *)",
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m aruodas_scraper doctor *)",
+      "Bash(.venv/Scripts/python.exe -m aruodas_scraper validate *)",
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m aruodas_scraper validate *)",
+      "Bash(.venv/Scripts/python.exe -m aruodas_scraper report-unknown-fields *)",
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m aruodas_scraper report-unknown-fields *)"
+    ]
+  }
+}

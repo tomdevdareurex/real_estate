@@ -1,0 +1,124 @@
+schema_version: 1
+
+# Every value is optional. Anything omitted falls back to the command default,
+# and an explicitly passed CLI flag always overrides what is set here.
+#
+# `enabled` selects which command runs when the CLI is invoked with no subcommand.
+# Exactly one may be enabled: setting both to true, or both to false, is rejected.
+scrape_live:
+  enabled: true
+  cities_config: cities.yaml
+  city: vilnius
+  property_type: all
+  output: ../data/processed
+  cache: ../data/raw/cache
+  # Search pages are the cheap half of the run: one request returns ~25 listings, each card
+  # already carrying price, price/m2, rooms, area, floor, year, heating, condition and
+  # address. 20 pages is therefore ~500 records for 20 requests, which is roughly twice the
+  # per-IP budget for a single burst and comfortably inside two cooldowns.
+  max_pages: 20
+  # Detail pages are the expensive half: one request per listing, for the description,
+  # coordinates, seller and engagement stats that no card carries. This caps only those
+  # fetches - every listing seen in phase A is exported from its card regardless.
+  max_listings_per_category: 60
+  timeout_seconds: 30.0
+
+  # Mean gap between requests; the actual delay is drawn uniformly from
+  # [min_delay - jitter, min_delay + jitter], so 5 +/- 2 waits between 3 and 7 seconds.
+  #
+  # That question is now settled. Pacing was raised to 45.0 and the run still collected
+  # exactly 16 details before the origin began returning 403s - slower pacing bought only
+  # a handful more pages than the ~11 seen at ~13s. The ceiling is therefore a per-IP
+  # request *count*, not a rate, and no amount of waiting between requests will lift it.
+  # Pacing was lowered again because a 9x faster run costs nothing against a count-based
+  # budget, and recovery of refused listings moved to retry_cooldown_seconds below.
+  # Previous value, kept so the experiment is not repeated: min_delay_seconds: 45.0
+  min_delay_seconds: 5.0
+  jitter_seconds: 2.0
+
+  # The run spends its request budget in bursts. It stops the burst on the first refusal
+  # rather than firing the rest of the queue into the block, waits this long for the block
+  # to lapse, then resumes just below the burst size the origin last allowed. Sitting a
+  # little OVER the observed 20-25 minute TTL is the safe side of the bet: undershooting
+  # lands the next request inside the block and renews it. Set to 0 to never wait, which
+  # ends the run at the first refusal.
+  retry_cooldown_seconds: 1500
+
+  # Bounds that make the run terminate. Four cooldowns is a little under two hours of
+  # waiting; max_runtime_seconds is the hard ceiling over the whole run, cooldowns included,
+  # and a cooldown that would overrun it is not started at all. Leave it unset for no limit.
+  max_cooldowns: 4
+  # max_runtime_seconds: 14400
+
+  refresh_cache: false
+  # Re-fetch listings that are already in the export instead of skipping them. Left off,
+  # because a run gets only about 5 requests per cooldown: re-fetching a detail page already
+  # on disk costs a listing that still has nothing but a search card. Successive runs
+  # therefore deepen the dataset instead of rebuilding it. Only a *detail* record counts as
+  # done, so card-only listings are still revisited. Pass --overwrite for a deliberate
+  # refresh of prices and listing status.
+  overwrite: false
+
+  # Spend the whole run on detail pages for listings the export already holds as search cards,
+  # skipping the search walk entirely - zero requests on pages already harvested. Both phases
+  # draw on one per-IP budget, and the search walk is greedy enough (max_pages x categories)
+  # to consume all of it, which is why rows kept arriving without coordinates. Pass
+  # --no-deepen to spend the budget discovering new listings instead. An export with no
+  # card-only listings falls back to the search walk on its own, so a fresh checkout works.
+  deepen: true
+
+  # Identity presented to Aruodas. LEAVE THIS UNSET on the curl transport: the
+  # impersonation profile below already supplies a User-Agent that agrees with the TLS
+  # and HTTP/2 fingerprint it replays, and overriding it puts the header set and the
+  # handshake into contradiction - which is the exact signal the curl transport exists to
+  # remove. Setting it also breaks a borrowed 'cookie_file', because the bot-protection
+  # layer binds a session to the user agent that minted it.
+  # Set it only for the allow-list case, to the exact string Aruodas whitelisted, and
+  # then make sure it matches both the impersonation profile and the browser that
+  # produced the cookie.
+  # user_agent: "..."
+
+  # Path to a file holding a Cookie header copied from a signed-in browser on this network
+  # (DevTools > Network > document request > Copy as cURL). The bot-protection cookie is
+  # minted by a JS sensor this client cannot run, so borrowing a browser session raises the
+  # request ceiling before the origin challenges again. It expires; re-copy when 403s return.
+  # Keep this file OUTSIDE the repository: it authenticates you to the origin.
+  #
+  # Alignment matters and pulls in two directions. The protection layer binds a session to
+  # the user agent that minted it, but overriding 'user_agent' to match that browser puts
+  # the headers at odds with the fingerprint 'impersonate' replays. Prefer a browser whose
+  # major version matches an accepted impersonation profile, so one coherent identity
+  # satisfies both. If the two cannot be reconciled, run cookie-free rather than sending a
+  # contradictory identity - comment this line out to do that.
+  cookie_file: ../../aruodas_secrets/cookie.txt
+
+  # Certificate authority for a TLS-intercepting corporate proxy such as Zscaler.
+  # When unset the scraper falls back to SSL_CERT_FILE, REQUESTS_CA_BUNDLE,
+  # CURL_CA_BUNDLE, the operating system trust store, then certifi. Relative paths
+  # resolve against this file's directory.
+  # ca_bundle: ../../corp-ca.pem
+
+  # Explicit proxy URL, including credentials when the proxy answers HTTP 407.
+  # proxy: "http://user:password@proxy.example.com:8080"
+
+  # How bytes are retrieved. 'curl' uses curl_cffi to present a genuine Chrome TLS and
+  # HTTP/2 fingerprint, which is what the origin's bot protection actually scores; 'httpx'
+  # is detectable no matter which headers it sends and is kept only for offline testing.
+  transport: curl
+
+  # Chrome profile replayed by the curl transport. Newer is not better: chrome136 is
+  # rejected where chrome124 and chrome131 are accepted. Try another profile if 403s
+  # reappear.
+  impersonate: chrome131
+
+  # Only used by the httpx transport, where HTTP/2 adds a further mismatched fingerprint.
+  http2: false
+
+parse_offline:
+  enabled: false
+  property_type: all
+  city: vilnius
+  output: ../data/processed
+  resume: false
+  refresh: false
+  translate: false

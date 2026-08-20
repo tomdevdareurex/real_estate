@@ -1,0 +1,66 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aruodas-scraper"
+version = "0.1.0"
+description = "Parser and exporter for Aruodas real-estate listing HTML."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Aruodas Scraper Contributors" }]
+dependencies = [
+  "brotli==1.1.0",
+  "curl_cffi==0.16.0",
+  "h2==4.2.0",
+  "httpx==0.28.1",
+  "pydantic==2.11.7",
+  "PyYAML==6.0.2",
+  "selectolax==0.3.29",
+  "tenacity==9.1.2",
+  "truststore==0.10.1",
+  "typer==0.16.0",
+]
+
+[project.scripts]
+aruodas = "aruodas_scraper.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aruodas_scraper"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+testpaths = ["tests"]
+markers = [
+  "unit: isolated unit tests",
+  "integration: component integration tests",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["aruodas_scraper"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["aruodas_scraper"]

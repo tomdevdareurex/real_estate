@@ -1,0 +1,27 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+.env
+.idea/
+.vscode/
+data/raw/*
+!data/raw/.gitkeep
+data/interim/*
+!data/interim/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+logs/*
+!logs/.gitkeep
+# Borrowed browser sessions authenticate this client to the origin. The working copy lives
+# outside the repository; these entries stop a stray copy inside it from being committed.
+aruodas_secrets/
+*cookie*.txt
+*.pem

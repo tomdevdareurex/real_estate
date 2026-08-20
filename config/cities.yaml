@@ -1,0 +1,13 @@
+cities:
+  vilnius:
+    display_name: Vilnius
+    country: Lithuania
+    categories:
+      apartments:
+        search_url: https://www.aruodas.lt/butai/vilniuje/
+        listing_id_prefix: "1-"
+        output_filename: apartments_vilnius.csv
+      houses:
+        search_url: https://www.aruodas.lt/namai/vilniuje/
+        listing_id_prefix: "2-"
+        output_filename: houses_vilnius.csv

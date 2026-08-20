@@ -1,0 +1,8 @@
+schema_version: 1
+source: aruodas
+input_directory: ../snapshot_html
+city: vilnius
+property_types:
+  - apartments
+  - houses
+

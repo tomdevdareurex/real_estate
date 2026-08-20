@@ -1,0 +1,9 @@
+schema_version: 1
+source: aruodas
+checkpoint_directory: data/interim/checkpoints
+output_directory: data/processed
+collect_advertiser_names: false
+collect_image_urls: false
+translation:
+  enabled: false
+  provider: disabled
