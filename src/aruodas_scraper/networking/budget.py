@@ -27,6 +27,13 @@ DEFAULT_COOLDOWN_SECONDS = 1500.0
 # take before it is likelier to be interrupted than to finish.
 DEFAULT_MAX_COOLDOWNS = 4
 
+# A burst that served nothing means the block had not lapsed by the time we asked again. One
+# of those is bad luck; two in a row means waiting on this cadence is not restoring service,
+# and every further cooldown is 25 minutes bought for no pages. The learned ceiling cannot
+# notice this on its own: an empty burst drives the observation to zero, which
+# `_predicted_ceiling` then floors back up to `minimum_burst`.
+DEFAULT_MAX_EMPTY_BURSTS = 2
+
 
 @dataclass(frozen=True, slots=True)
 class BudgetPolicy:
@@ -41,6 +48,9 @@ class BudgetPolicy:
     # Never predict a ceiling below this: a too-pessimistic estimate stalls the crawl in
     # cooldowns that buy nothing.
     minimum_burst: int = 5
+    # Consecutive bursts that may serve nothing before the run concludes the origin is
+    # refusing it outright rather than rationing it.
+    max_empty_bursts: int = DEFAULT_MAX_EMPTY_BURSTS
 
     def __post_init__(self) -> None:
         if self.cooldown_seconds < 0:
@@ -53,6 +63,8 @@ class BudgetPolicy:
             raise ValueError("safety_margin cannot be negative")
         if self.minimum_burst < 1:
             raise ValueError("minimum_burst must be at least one")
+        if self.max_empty_bursts < 1:
+            raise ValueError("max_empty_bursts must be at least one")
 
 
 class RequestBudget:
@@ -78,6 +90,7 @@ class RequestBudget:
         self._blocked = False
         self._observed_ceiling: int | None = None
         self._cooldowns_used = 0
+        self._empty_bursts = 0
         self._stop_reason: str | None = None
 
     @property
@@ -127,6 +140,16 @@ class RequestBudget:
             return False
         if not self._burst_is_spent():
             return True
+        # `_burst_successes` is only cleared inside `_cooldown`, so it still describes the
+        # burst that just ended. A spent burst is either blocked or at its predicted ceiling,
+        # and the ceiling is never below one, so zero here always means "served nothing".
+        self._empty_bursts = self._empty_bursts + 1 if self._burst_successes == 0 else 0
+        if self._empty_bursts >= self._policy.max_empty_bursts:
+            self._stop_reason = (
+                f"the origin served nothing in {self._empty_bursts} consecutive burst(s), so "
+                "waiting is not restoring service and further cooldowns would only cost time"
+            )
+            return False
         if self._cooldowns_used >= self._policy.max_cooldowns:
             self._stop_reason = (
                 f"the origin is still refusing this client after {self._cooldowns_used} "
@@ -180,6 +203,7 @@ class RequestBudget:
 __all__ = [
     "DEFAULT_COOLDOWN_SECONDS",
     "DEFAULT_MAX_COOLDOWNS",
+    "DEFAULT_MAX_EMPTY_BURSTS",
     "BudgetPolicy",
     "RequestBudget",
 ]

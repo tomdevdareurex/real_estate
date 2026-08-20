@@ -83,11 +83,13 @@ def test_the_run_ends_once_the_cooldown_allowance_is_spent() -> None:
     clock = _FakeClock()
     budget = _budget(clock, cooldown_seconds=10.0, max_cooldowns=2, minimum_burst=1)
 
-    budget.record_block()
-    assert budget.request_permitted()
-    budget.record_block()
-    assert budget.request_permitted()
-    budget.record_block()
+    # Each burst serves one page before being refused, so the run is being rationed rather
+    # than refused outright and it is the cooldown allowance that ends it.
+    for _ in range(3):
+        budget.record_success()
+        budget.record_block()
+        if budget.cooldowns_used < 2:
+            assert budget.request_permitted()
 
     assert not budget.request_permitted()
     assert budget.cooldowns_used == 2
@@ -144,6 +146,49 @@ def test_the_ceiling_tracks_the_lowest_burst_the_origin_allowed() -> None:
 
 
 @pytest.mark.unit
+def test_consecutive_empty_bursts_end_the_run_before_the_cooldown_allowance() -> None:
+    # A burst that serves nothing means the block did not lapse while we waited. The learned
+    # ceiling cannot see this - an empty burst drives it to zero and the minimum_burst floor
+    # lifts it straight back up - so without this guard the run buys every remaining cooldown
+    # to rediscover that it is still blocked.
+    clock = _FakeClock()
+    budget = _budget(clock, cooldown_seconds=1500.0, max_cooldowns=4, max_empty_bursts=2)
+
+    budget.record_block()
+    assert budget.request_permitted()
+    budget.record_block()
+
+    assert not budget.request_permitted()
+    assert budget.cooldowns_used == 1
+    assert clock.slept == [1500.0]
+    assert budget.stop_reason is not None
+    assert "served nothing" in budget.stop_reason
+
+
+@pytest.mark.unit
+def test_a_productive_burst_resets_the_empty_burst_counter() -> None:
+    # The guard fires on consecutive emptiness, not cumulative: a burst that served pages
+    # proves the block does lapse, so earlier empty ones say nothing about the current one.
+    clock = _FakeClock()
+    budget = _budget(
+        clock, cooldown_seconds=1.0, max_cooldowns=9, max_empty_bursts=2, minimum_burst=1
+    )
+
+    budget.record_block()
+    assert budget.request_permitted()
+
+    budget.record_success()
+    budget.record_block()
+    assert budget.request_permitted()
+
+    budget.record_block()
+    assert budget.request_permitted()
+
+    assert budget.cooldowns_used == 3
+    assert budget.stop_reason is None
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize(
     "policy",
     [
@@ -152,6 +197,7 @@ def test_the_ceiling_tracks_the_lowest_burst_the_origin_allowed() -> None:
         {"max_runtime_seconds": 0.0},
         {"safety_margin": -1},
         {"minimum_burst": 0},
+        {"max_empty_bursts": 0},
     ],
 )
 def test_invalid_policies_are_rejected(policy: dict[str, float]) -> None:

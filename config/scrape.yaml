@@ -48,6 +48,19 @@ scrape_live:
   # waiting; max_runtime_seconds is the hard ceiling over the whole run, cooldowns included,
   # and a cooldown that would overrun it is not started at all. Leave it unset for no limit.
   max_cooldowns: 4
+
+  # max_cooldowns alone cannot tell "the origin is rationing us" from "the origin is refusing
+  # us outright": a burst that serves nothing drives the learned ceiling to zero, and the
+  # minimum_burst floor lifts it straight back to 5, so the run keeps buying 25-minute
+  # cooldowns to rediscover that it is still blocked. A run on an expired cookie spent its
+  # last two exactly that way - 50 minutes for zero pages - and then stopped on the allowance
+  # rather than on the evidence. Stop instead after this many consecutive bursts that serve
+  # nothing. At that point the cookie needs re-copying; more waiting is not a substitute.
+  #
+  # At max_cooldowns: 4 the two limits happen to bite at the same moment, so this buys no time
+  # today - what it buys is a stop_reason that names the cause, and a bound that holds if
+  # max_cooldowns is ever raised. Waste here scales with the allowance; this does not.
+  max_empty_bursts: 2
   # max_runtime_seconds: 14400
 
   refresh_cache: false

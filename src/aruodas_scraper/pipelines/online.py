@@ -28,7 +28,11 @@ from aruodas_scraper.models import (
     OnlineScrapeSummary,
     UnknownField,
 )
-from aruodas_scraper.networking.budget import BudgetPolicy, RequestBudget
+from aruodas_scraper.networking.budget import (
+    DEFAULT_MAX_EMPTY_BURSTS,
+    BudgetPolicy,
+    RequestBudget,
+)
 from aruodas_scraper.networking.http_client import AruodasHttpClient
 from aruodas_scraper.parsers.apartment import parse_apartment
 from aruodas_scraper.parsers.house import parse_house
@@ -288,6 +292,7 @@ def process_online(
     deepen: bool = True,
     retry_cooldown_seconds: float = DEFAULT_RETRY_COOLDOWN_SECONDS,
     max_cooldowns: int = 4,
+    max_empty_bursts: int = DEFAULT_MAX_EMPTY_BURSTS,
     max_runtime_seconds: float | None = None,
     sleeper: Callable[[float], None] = time.sleep,
     shuffler: Callable[[list[DiscoveryRecord]], None] = secrets.SystemRandom().shuffle,
@@ -311,6 +316,9 @@ def process_online(
         retry_cooldown_seconds: Seconds to wait out a block before retrying. Zero disables
             cooldowns entirely, ending the run at the first block.
         max_cooldowns: How many blocks the run may wait out before giving up.
+        max_empty_bursts: How many consecutive bursts may serve nothing before the run gives
+            up. Guards against spending the whole cooldown allowance on a block that is not
+            lapsing, which yields no pages at 25 minutes apiece.
         deepen: Spend the run on listings the export holds only as search cards, skipping
             phase A entirely. Falls back to a normal search walk when there are none, so a
             cold start still works. Turn it off to go discovering new listings instead.
@@ -337,6 +345,7 @@ def process_online(
             # A zero cooldown would retry straight back into the live block, so treat it as
             # the caller asking for no waiting at all.
             max_cooldowns=0 if retry_cooldown_seconds == 0 else max_cooldowns,
+            max_empty_bursts=max_empty_bursts,
             max_runtime_seconds=max_runtime_seconds,
         ),
         sleeper=sleeper,

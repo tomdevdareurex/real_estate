@@ -41,6 +41,9 @@ class ScrapeLiveOptions(BaseModel):
     # How many blocks the run may wait out, and the wall-clock ceiling for the whole run.
     # Together these bound a run that would otherwise sit in cooldowns indefinitely.
     max_cooldowns: int | None = Field(default=None, ge=0, le=20)
+    # Consecutive bursts that may serve nothing before the run stops, so a block that is not
+    # lapsing costs one cooldown rather than the whole allowance.
+    max_empty_bursts: int | None = Field(default=None, ge=1, le=10)
     max_runtime_seconds: float | None = Field(default=None, ge=1.0)
     refresh_cache: bool | None = None
     overwrite: bool | None = None

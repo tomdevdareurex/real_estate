@@ -19,7 +19,7 @@ from aruodas_scraper.constants import (
 from aruodas_scraper.exceptions import ConfigurationError, RetrievalError
 from aruodas_scraper.logging_config import configure_logging
 from aruodas_scraper.networking.browser_profile import DEFAULT_USER_AGENT, navigation_headers
-from aruodas_scraper.networking.budget import DEFAULT_MAX_COOLDOWNS
+from aruodas_scraper.networking.budget import DEFAULT_MAX_COOLDOWNS, DEFAULT_MAX_EMPTY_BURSTS
 from aruodas_scraper.networking.cache import HtmlCache
 from aruodas_scraper.networking.cookie_source import (
     PROTECTION_COOKIE_NAME,
@@ -107,6 +107,7 @@ _COMMAND_DEFAULTS: dict[str, dict[str, object]] = {
         "jitter_seconds": DEFAULT_JITTER_SECONDS,
         "retry_cooldown_seconds": DEFAULT_RETRY_COOLDOWN_SECONDS,
         "max_cooldowns": DEFAULT_MAX_COOLDOWNS,
+        "max_empty_bursts": DEFAULT_MAX_EMPTY_BURSTS,
         "max_runtime_seconds": None,
         "refresh_cache": False,
         "overwrite": False,
@@ -279,6 +280,15 @@ def scrape_live_command(
             "--retry-cooldown-seconds of wall clock, so this bounds the total run length.",
         ),
     ] = DEFAULT_MAX_COOLDOWNS,
+    max_empty_bursts: Annotated[
+        int,
+        typer.Option(
+            min=1,
+            max=10,
+            help="Give up once this many consecutive bursts have served nothing. A block "
+            "that is not lapsing then costs one cooldown instead of the whole allowance.",
+        ),
+    ] = DEFAULT_MAX_EMPTY_BURSTS,
     max_runtime_seconds: Annotated[
         float | None,
         typer.Option(
@@ -301,6 +311,14 @@ def scrape_live_command(
             )
         ),
     ] = True,
+    allow_stale_cookie: Annotated[
+        bool,
+        typer.Option(
+            help="Start even when the cookie file is old enough to have been rotated. "
+            "Off by default, because a run that waits out cooldowns on a spent cookie "
+            "spends hours to collect almost nothing.",
+        ),
+    ] = False,
     user_agent: Annotated[
         str,
         typer.Option(help="Identity sent to Aruodas; use the string they allow-listed."),
@@ -376,6 +394,9 @@ def scrape_live_command(
     max_cooldowns = _resolve(
         "max_cooldowns", max_cooldowns, configured.max_cooldowns if configured else None
     )
+    max_empty_bursts = _resolve(
+        "max_empty_bursts", max_empty_bursts, configured.max_empty_bursts if configured else None
+    )
     max_runtime_seconds = _resolve(
         "max_runtime_seconds",
         max_runtime_seconds,
@@ -412,6 +433,15 @@ def scrape_live_command(
         registry.get_city(city)
         cookie = load_cookie_file(cookie_file)
         _warn_about_cookie(cookie)
+        if cookie is not None and cookie.is_stale and not allow_stale_cookie and max_cooldowns > 0:
+            typer.echo(
+                f"  Refusing to start: this run may wait out up to {max_cooldowns} cooldown(s) "
+                "on a cookie that has probably already been rotated, which is hours spent for "
+                "the request ceiling of no cookie at all. Re-copy it, or pass "
+                "--allow-stale-cookie to run anyway.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
         with AruodasHttpClient(
             cache=HtmlCache(cache),
             delay_policy=DelayPolicy.centred(
@@ -441,6 +471,7 @@ def scrape_live_command(
                 deepen=deepen,
                 retry_cooldown_seconds=retry_cooldown_seconds,
                 max_cooldowns=max_cooldowns,
+                max_empty_bursts=max_empty_bursts,
                 max_runtime_seconds=max_runtime_seconds,
             )
     except (ConfigurationError, RetrievalError, OSError, ValueError) as error:

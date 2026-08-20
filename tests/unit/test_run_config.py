@@ -17,6 +17,7 @@ scrape_live:
   jitter_seconds: 2.0
   retry_cooldown_seconds: 120
   max_cooldowns: 2
+  max_empty_bursts: 3
   max_runtime_seconds: 3600
   overwrite: true
 parse_offline:
@@ -43,6 +44,7 @@ def test_load_run_config_reads_both_command_sections(tmp_path: Path) -> None:
     assert config.scrape_live.jitter_seconds == 2.0
     assert config.scrape_live.retry_cooldown_seconds == 120.0
     assert config.scrape_live.max_cooldowns == 2
+    assert config.scrape_live.max_empty_bursts == 3
     assert config.scrape_live.max_runtime_seconds == 3600.0
     assert config.scrape_live.overwrite is True
     assert config.parse_offline.resume is True
@@ -92,6 +94,8 @@ parse_offline:
         "schema_version: 1\nscrape_live:\n  retry_cooldown_seconds: -1\n",
         "schema_version: 1\nscrape_live:\n  max_cooldowns: 21\n",
         "schema_version: 1\nscrape_live:\n  max_cooldowns: -1\n",
+        "schema_version: 1\nscrape_live:\n  max_empty_bursts: 0\n",
+        "schema_version: 1\nscrape_live:\n  max_empty_bursts: 11\n",
         "schema_version: 1\nscrape_live:\n  max_runtime_seconds: 0\n",
         "schema_version: 1\nscrape_live:\n  property_type: flats\n",
         "schema_version: 1\nscrape_live:\n  city: Vilnius\n",

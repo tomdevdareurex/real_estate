@@ -85,6 +85,10 @@ def test_scrape_live_command_runs_bounded_online_pipeline(
         app,
         [
             "scrape-live",
+            # Without this the run reads the workstation's config/scrape.yaml, whose
+            # cookie_file points outside the repository - so the test would pass or fail on
+            # whether that file happens to exist, and on how old it is.
+            "--no-config",
             "--property-type",
             "apartments",
             "--output",
@@ -407,6 +411,123 @@ def test_scrape_live_reads_the_retry_cooldown_from_the_run_configuration(
 
     assert result.exit_code == 0
     assert captured["retry_cooldown_seconds"] == 120.0
+
+
+def _stale_cookie(tmp_path: Path) -> Path:
+    cookie_file = tmp_path / "cookie.txt"
+    cookie_file.write_text("_px3=borrowed", encoding="utf-8")
+    stale = os.stat(cookie_file).st_mtime - (STALE_AFTER_SECONDS + 600)
+    os.utime(cookie_file, (stale, stale))
+    return cookie_file
+
+
+@pytest.mark.integration
+def test_scrape_live_passes_the_empty_burst_limit_to_the_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured = _capture_scrape_live(monkeypatch)
+
+    result = runner.invoke(
+        app,
+        [
+            "scrape-live",
+            "--no-config",
+            "--max-empty-bursts",
+            "3",
+            "--output",
+            str(tmp_path / "output"),
+            "--cache",
+            str(tmp_path / "cache"),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["max_empty_bursts"] == 3
+
+
+@pytest.mark.integration
+def test_scrape_live_refuses_to_start_a_waiting_run_on_a_stale_cookie(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A run that waits out cooldowns on a rotated cookie holds the request ceiling of no
+    # cookie at all, so it spends hours to collect almost nothing. Cheaper to say so first.
+    captured = _capture_scrape_live(monkeypatch)
+
+    result = runner.invoke(
+        app,
+        [
+            "scrape-live",
+            "--no-config",
+            "--cookie-file",
+            str(_stale_cookie(tmp_path)),
+            "--transport",
+            "httpx",
+            "--output",
+            str(tmp_path / "output"),
+            "--cache",
+            str(tmp_path / "cache"),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Refusing to start" in result.output
+    assert captured == {}
+
+
+@pytest.mark.integration
+def test_scrape_live_starts_on_a_stale_cookie_when_it_is_explicitly_allowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured = _capture_scrape_live(monkeypatch)
+
+    result = runner.invoke(
+        app,
+        [
+            "scrape-live",
+            "--no-config",
+            "--cookie-file",
+            str(_stale_cookie(tmp_path)),
+            "--allow-stale-cookie",
+            "--transport",
+            "httpx",
+            "--output",
+            str(tmp_path / "output"),
+            "--cache",
+            str(tmp_path / "cache"),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured != {}
+
+
+@pytest.mark.integration
+def test_scrape_live_starts_on_a_stale_cookie_when_the_run_never_waits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Without cooldowns there are no hours to waste, so a quick check stays usable.
+    captured = _capture_scrape_live(monkeypatch)
+
+    result = runner.invoke(
+        app,
+        [
+            "scrape-live",
+            "--no-config",
+            "--cookie-file",
+            str(_stale_cookie(tmp_path)),
+            "--max-cooldowns",
+            "0",
+            "--transport",
+            "httpx",
+            "--output",
+            str(tmp_path / "output"),
+            "--cache",
+            str(tmp_path / "cache"),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured != {}
 
 
 @pytest.mark.integration
