@@ -38,6 +38,15 @@ class PageFetcher(Protocol):
         """Drop cookies so the next attempt negotiates a fresh session."""
         ...
 
+    def set_cookie(self, cookie: str) -> None:
+        """Replace the browser session cookie sent on every subsequent request.
+
+        Exists so a run can adopt a freshly minted cookie without being restarted: the block
+        that stops a run is cleared by re-earning the session, not by waiting, and a run that
+        cannot swap its cookie has no way to use one.
+        """
+        ...
+
     def close(self) -> None:
         """Release the underlying connection pool."""
         ...

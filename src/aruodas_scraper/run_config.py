@@ -45,6 +45,10 @@ class ScrapeLiveOptions(BaseModel):
     # lapsing costs one cooldown rather than the whole allowance.
     max_empty_bursts: int | None = Field(default=None, ge=1, le=10)
     max_runtime_seconds: float | None = Field(default=None, ge=1.0)
+    # Open a browser on a block so the challenge can be solved, instead of waiting the block
+    # out. Solving clears it immediately, so this replaces a 25-minute wait with a click.
+    # Needs a person at the keyboard, which is why it is off unless asked for.
+    solve_on_block: bool | None = None
     refresh_cache: bool | None = None
     overwrite: bool | None = None
     deepen: bool | None = None

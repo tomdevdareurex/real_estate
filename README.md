@@ -67,7 +67,8 @@ outputs, checkpoints, and logs are ignored by `.gitignore`.
 | Command | Data source | Key options | What it does |
 |---|---|---|---|
 | `parse-offline` | Local HTML files (no network) | `--input`, `--property-type {apartments,houses,all}`, `--city`, `--output`, `--checkpoint`, `--resume`, `--refresh`, `--translate`, `--config`, `--no-config` | Parses already-downloaded listing-detail pages from a directory. `--property-type all` auto-classifies each file by its canonical URL (apartment vs house). `--input` is required unless the run configuration supplies it. |
-| `scrape-live` | Live aruodas.lt (rate-limited, cached) | `--cities-config`, `--city`, `--property-type {apartments,houses,all}`, `--output`, `--cache`, `--max-pages` (1-20), `--max-listings-per-category` (1-500), `--timeout-seconds` (1-120), `--refresh-cache`, `--overwrite`, `--deepen`/`--no-deepen`, `--config`, `--no-config` | Follows configured search pages and retrieves bounded listing-detail pages, producing the same normalized CSV/JSON as offline parsing. Deepens listings already held as search cards by default; `--no-deepen` walks the search pages to discover new ones. |
+| `scrape-live` | Live aruodas.lt (rate-limited, cached) | `--cities-config`, `--city`, `--property-type {apartments,houses,all}`, `--output`, `--cache`, `--max-pages` (1-20), `--max-listings-per-category` (1-500), `--timeout-seconds` (1-120), `--solve-on-block`, `--refresh-cache`, `--overwrite`, `--deepen`/`--no-deepen`, `--config`, `--no-config` | Follows configured search pages and retrieves bounded listing-detail pages, producing the same normalized CSV/JSON as offline parsing. Deepens listings already held as search cards by default; `--no-deepen` walks the search pages to discover new ones. |
+| `mint-cookie` | A real Chrome window | `--output`, `--url`, `--profile-dir`, `--timeout-seconds` (10-1800), `--config`, `--no-config` | Opens Chrome, waits for you to solve any bot-protection challenge, then writes the session cookie to `cookie_file`. A solved challenge is what raises the request budget, so this is the fix for a run that dies after ~6 requests. Needs the optional `playwright` extra. |
 | `validate <csv_path>` | An exported CSV | — | Checks a CSV for duplicate listing IDs and reports total valid records. |
 | `report-unknown-fields` | `data/processed/unknown_fields.csv` | `--report` | Prints any Lithuanian attribute labels seen that aren't yet mapped in `field_mappings_lt_en.yaml`. |
 | `show-config` | `config/default.yaml` or the run configuration | `--config`, `--command {scrape-live,parse-offline}` | Displays the effective YAML configuration. With `--command`, prints the merged settings a run would actually use. |
@@ -239,22 +240,51 @@ backslash, and a wrapped paste silently drops whatever follows the break.
 Run `doctor` first. It reports the transport, the resolved TLS trust, whether Aruodas answers,
 and — the part worth reading — the age of your cookie and whether it still carries a `_px3`.
 
-### The cookie, and why it expires
+### The cookie, and why it decides everything
 
 Aruodas is behind PerimeterX. The `_px3` cookie that raises your request ceiling is minted by a
-JavaScript sensor this client cannot execute, so the scraper borrows one from your browser.
+JavaScript sensor this client cannot execute, so the scraper borrows one from a real browser.
+
+**How the cookie was earned matters more than how fresh it is.** Measured 2026-08-22: a cookie
+copied from an ordinary browse was spent after about **6** requests, while a cookie taken after
+the challenge was solved by hand carried a run past **100** without a refusal. A solved challenge
+is scored as evidence of a human, and the budget is raised to match. Both cookies contain `_px3`,
+so nothing in the file tells them apart — only how you got it.
 
 Keep it **outside** the repository, at `../aruodas_secrets/cookie.txt`. `.gitignore` blocks
 `aruodas_secrets/` and `*cookie*.txt` so a stray copy cannot be committed.
 
-To refresh it: open aruodas.lt in a signed-in browser, DevTools → **Network** → click the
-document request → **Headers** → switch on the **Raw** toggle → copy the entire `Cookie:` value
-into the file. The Raw toggle matters. The parsed view truncates long values behind a
-`Show more` button, and copying from it yields a cookie without `_px3` — which behaves exactly
-like no cookie at all.
+#### Refreshing it
 
-It goes stale after an hour. `doctor` warns you rather than leaving it to be inferred from a
-disappointing run.
+```powershell
+.venv\Scripts\python.exe -m aruodas_scraper mint-cookie
+```
+
+This opens Chrome, loads a search page, and waits. If a challenge appears, solve it in the window
+— the command notices the page clear, harvests the cookie, and writes it. The value is never
+printed. A persistent profile beside the cookie remembers previous solves, so most runs of this
+command need no interaction at all.
+
+It needs Playwright, which is an optional extra because nothing else uses it:
+
+```powershell
+.venv\Scripts\python.exe -m pip install playwright
+```
+
+No browser download follows; it drives the Chrome already installed.
+
+<details>
+<summary>Doing it by hand instead</summary>
+
+Open aruodas.lt in a signed-in browser, DevTools → **Network** → click the document request →
+**Headers** → switch on the **Raw** toggle → copy the entire `Cookie:` value into the file. The
+Raw toggle matters: the parsed view truncates long values behind a `Show more` button, and
+copying from it yields a cookie without `_px3`, which behaves exactly like no cookie at all.
+
+</details>
+
+The cookie goes stale after about an hour. `doctor` warns you rather than leaving it to be
+inferred from a disappointing run.
 
 ### What a block looks like, and what to do
 
@@ -274,7 +304,30 @@ Exports are flushed after **every** burst, so killing the run costs nothing alre
 
 The one thing that actively hurts is **re-running while blocked**: requests made inside a block
 are refused *and* renew its TTL. If the run ends with `the origin is still refusing this client
-after 4 cooldown(s)`, wait half an hour, refresh the cookie, and start again.
+after 4 cooldown(s)`, do not just wait it out — run `mint-cookie` and solve the challenge. That
+clears the state immediately and is what restores the ceiling; waiting alone gives you back the
+same ~6-request budget you just spent.
+
+#### Skipping the wait entirely
+
+Better still, don't let the run stall in the first place:
+
+```powershell
+.venv\Scripts\python.exe -m aruodas_scraper scrape-live --solve-on-block
+```
+
+With `--solve-on-block` (or `solve_on_block: true` in the config), a block opens a browser
+instead of starting a cooldown. Solve the challenge and the run **continues immediately** —
+keeping its cache, its pacing, and everything already collected. No restart, no 25 minutes.
+
+The learned burst ceiling is discarded on renewal, because it measured the cookie that was just
+replaced. Carrying a ceiling of 6 into a session worth 100+ would put the run straight back into
+the cooldowns the renewal just bought its way out of.
+
+It needs a person at the keyboard, so it is **off by default**. Unattended and CI runs keep the
+old wait-only behaviour, and a renewal that fails or is declined falls back to waiting rather
+than ending the run. Because the run can now re-earn its session on demand, `--solve-on-block`
+also lifts the refusal to start on a stale cookie.
 
 Expect roughly five requests per 25-minute cooldown and four cooldowns per run. Since one search
 page yields about 25 records, that is several hundred listings in a session. Note that the
@@ -324,8 +377,23 @@ data/processed/failed_urls.csv
 data/processed/unknown_fields.csv
 ```
 
-CSV files are UTF-8 and have stable English headers. JSON-valued CSV columns are compact,
-deterministically ordered JSON strings. See [docs/data_dictionary.md](docs/data_dictionary.md).
+CSV files have stable English headers. JSON-valued CSV columns are compact, deterministically
+ordered JSON strings. See [docs/data_dictionary.md](docs/data_dictionary.md).
+
+### Encoding
+
+CSVs are written **UTF-8 with a BOM** so Excel on Windows opens them correctly on a
+double-click. Without the BOM Excel assumes the legacy ANSI codepage and renders Lithuanian
+as mojibake — `Visorių g.` as `VisoriÅ³ g.` — even though the file itself is perfectly valid.
+
+Listing text stays in Lithuanian. The schema carries `title_lt`/`title_en` and
+`description_lt`/`description_en`, but the `_en` columns are only populated when a
+translation provider is configured, and none is by default, so they are empty.
+
+JSON artifacts are plain UTF-8 with no BOM, which many parsers reject.
+
+Anything reading these CSVs should use `utf-8-sig`, which handles files with and without the
+mark. `pandas.read_csv(path, encoding="utf-8-sig")` is the usual line.
 
 ## Translation
 

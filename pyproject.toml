@@ -23,6 +23,13 @@ dependencies = [
   "typer==0.16.0",
 ]
 
+[project.optional-dependencies]
+# Only `mint-cookie` needs this, and only on a workstation with a person at the keyboard:
+# it drives the Chrome already installed there so a human can solve the bot-protection
+# challenge. CI never mints, and the scraper imports it lazily, so keeping it out of the
+# required set leaves the package installable where no browser exists.
+browser = ["playwright==1.62.0"]
+
 [project.scripts]
 aruodas = "aruodas_scraper.cli:app"
 

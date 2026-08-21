@@ -11,7 +11,12 @@ from __future__ import annotations
 # cross-checks the two: a User-Agent and sec-ch-ua claiming a version the replayed
 # fingerprint does not match is a stronger bot signal than an honest older version.
 # Do not bump this ahead of a version that actually ships.
-_CHROME_MAJOR_VERSION = "131"
+#
+# These headers reach the wire only on the httpx transport: the curl transport imposes just
+# Accept-Language and lets the impersonation profile supply User-Agent and sec-ch-ua, so that
+# the header set cannot drift from the handshake. The pairing is kept anyway, so the two
+# transports never claim different identities.
+_CHROME_MAJOR_VERSION = "146"
 
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "

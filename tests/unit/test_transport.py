@@ -9,7 +9,10 @@ from curl_cffi.requests import RequestsError
 
 from aruodas_scraper.exceptions import BlockedError, RetrievalError
 from aruodas_scraper.networking import curl_fetcher as curl_module
-from aruodas_scraper.networking.browser_profile import DEFAULT_USER_AGENT
+from aruodas_scraper.networking.browser_profile import (
+    _CHROME_MAJOR_VERSION,
+    DEFAULT_USER_AGENT,
+)
 from aruodas_scraper.networking.cache import HtmlCache
 from aruodas_scraper.networking.curl_fetcher import CurlCffiFetcher, curl_verify_option
 from aruodas_scraper.networking.fetcher import PageResponse, TransportError
@@ -36,6 +39,7 @@ class FakeFetcher:
         self._responses = list(responses)
         self.requests: list[str] = []
         self.sessions_cleared = 0
+        self.cookies_set: list[str] = []
         self.closed = False
 
     def fetch_page(self, url: str, headers: Mapping[str, str]) -> PageResponse:
@@ -44,6 +48,9 @@ class FakeFetcher:
 
     def clear_session(self) -> None:
         self.sessions_cleared += 1
+
+    def set_cookie(self, cookie: str) -> None:
+        self.cookies_set.append(cookie)
 
     def close(self) -> None:
         self.closed = True
@@ -296,8 +303,21 @@ def test_curl_fetcher_uses_the_pinned_impersonation_profile_by_default(
 ) -> None:
     CurlCffiFetcher(trust=TlsTrust(True, "test", None), max_response_bytes=1000)
 
-    assert fake_curl[0].kwargs["impersonate"] == "chrome131"
+    assert fake_curl[0].kwargs["impersonate"] == curl_module.DEFAULT_IMPERSONATION
     assert fake_curl[0].kwargs["allow_redirects"] is False
+
+
+@pytest.mark.unit
+def test_the_impersonation_profile_and_the_header_identity_claim_one_version() -> None:
+    """The two transports must not claim different Chrome versions.
+
+    The bot-protection layer cross-checks the handshake against the header set, so a
+    User-Agent naming a version the replayed fingerprint does not match is a stronger bot
+    signal than an honest older version. AGENTS.md records this pairing as an invariant;
+    asserting it here means bumping one and forgetting the other fails the suite instead of
+    silently shipping a contradictory identity.
+    """
+    assert curl_module.DEFAULT_IMPERSONATION == f"chrome{_CHROME_MAJOR_VERSION}"
 
 
 @pytest.mark.unit
@@ -358,3 +378,32 @@ def test_explicit_user_agent_reaches_the_curl_session(fake_curl: list[FakeCurlSe
 
     assert fake_curl[0].sent_headers["User-Agent"] == "allow-listed/1.0"
     assert DEFAULT_USER_AGENT not in fake_curl[0].sent_headers.values()
+
+
+@pytest.mark.unit
+def test_the_curl_fetcher_sends_a_replacement_cookie_on_later_requests(
+    fake_curl: list[FakeCurlSession],
+) -> None:
+    """A blocked run recovers by swapping its cookie, so the swap must reach the wire."""
+    fetcher = CurlCffiFetcher(
+        trust=TlsTrust(True, "test", None), max_response_bytes=1000, cookie="_px3=old"
+    )
+
+    fetcher.set_cookie("_px3=new")
+    fetcher.fetch_page(_URL, {})
+
+    assert fake_curl[0].sent_headers["Cookie"] == "_px3=new"
+    # The replaced session's jar would otherwise be merged in alongside the new header,
+    # putting two generations of the same token on one request.
+    assert fake_curl[0].cookies.clear.called
+
+
+@pytest.mark.unit
+def test_the_client_passes_a_renewed_cookie_down_to_its_transport(tmp_path: Path) -> None:
+    """The run holds the client, not the fetcher, so the delegation is the whole seam."""
+    fetcher = FakeFetcher(PageResponse(status_code=200, headers={}, body=_GOOD_PAGE))
+    client = _client(tmp_path, fetcher)
+
+    client.set_cookie("_px3=renewed")
+
+    assert fetcher.cookies_set == ["_px3=renewed"]

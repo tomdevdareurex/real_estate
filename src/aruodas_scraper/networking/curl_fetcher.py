@@ -22,10 +22,17 @@ from aruodas_scraper.networking.tls import TlsTrust
 
 logger = logging.getLogger(__name__)
 
-# Newer is not better: chrome136 is rejected by the origin where chrome124 and chrome131
-# are accepted. Pinned to a profile verified against live search and detail pages, and
-# worth re-checking if 403s reappear.
-DEFAULT_IMPERSONATION = "chrome131"
+# Pinned to the newest profile curl_cffi 0.16.0 ships, because the profile has to agree with
+# the browser that mints `cookie_file`: PerimeterX binds a session to the identity that earned
+# it, so a Chrome 151 cookie replayed over a chrome131 handshake is a contradiction, and a
+# contradiction is the exact signal this transport exists to remove.
+#
+# The older "newer is not better" note (chrome136 rejected where chrome124/chrome131 were
+# accepted) was measured cookie-free, where there is no minting identity to agree with and the
+# profile is judged on its own. It does not carry over to a cookied run. Available profiles are
+# chrome131, chrome133a, chrome136, chrome142, chrome145, chrome146; step DOWN through those if
+# 403s reappear, and re-check which Chrome actually mints the cookie before blaming the profile.
+DEFAULT_IMPERSONATION = "chrome146"
 
 # Only Accept-Language is imposed; everything else must come from the impersonation
 # profile, because a header set that disagrees with the TLS fingerprint is the exact
@@ -125,6 +132,15 @@ class CurlCffiFetcher:
     def clear_session(self) -> None:
         """Drop cookies so the next attempt negotiates a fresh session."""
         self._session.cookies.clear()
+
+    def set_cookie(self, cookie: str) -> None:
+        """Adopt a newly minted browser session for every subsequent request."""
+        self._cookie = cookie
+        self._extra_headers["Cookie"] = cookie
+        # Whatever curl accumulated belongs to the session being replaced. Left in place it
+        # would be merged with the new header and send two generations of the same token.
+        self._session.cookies.clear()
+        logger.info("Adopted a refreshed browser session cookie (%d bytes).", len(cookie))
 
     def close(self) -> None:
         """Close the curl session."""

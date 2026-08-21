@@ -203,3 +203,122 @@ def test_a_productive_burst_resets_the_empty_burst_counter() -> None:
 def test_invalid_policies_are_rejected(policy: dict[str, float]) -> None:
     with pytest.raises(ValueError):
         BudgetPolicy(**policy)  # type: ignore[arg-type]
+
+
+def _renewing_budget(clock: _FakeClock, renewer: object, **policy: object) -> RequestBudget:
+    return RequestBudget(
+        BudgetPolicy(**policy),  # type: ignore[arg-type]
+        sleeper=clock.sleep,
+        clock=clock,
+        renewer=renewer,  # type: ignore[arg-type]
+    )
+
+
+def _spend_burst(budget: RequestBudget, successes: int) -> None:
+    """Serve `successes` requests, then have the origin refuse the next one."""
+    for _ in range(successes):
+        assert budget.request_permitted()
+        budget.record_success()
+    budget.record_block()
+
+
+@pytest.mark.unit
+def test_a_renewed_session_clears_the_block_without_waiting() -> None:
+    """Re-earning the session removes the block, so there is nothing left to wait out."""
+    clock = _FakeClock()
+    budget = _renewing_budget(clock, lambda: True)
+
+    _spend_burst(budget, 6)
+
+    assert budget.request_permitted()
+    assert clock.slept == []
+    assert budget.cooldowns_used == 0
+    assert budget.sessions_renewed == 1
+
+
+@pytest.mark.unit
+def test_a_renewal_forgets_the_ceiling_the_replaced_session_taught() -> None:
+    """A ceiling measured on a spent cookie would cripple the one that replaced it.
+
+    An unsolved-challenge session is spent after ~6 requests and a solved one runs past 100,
+    so carrying the old observation across would cap the new session at `minimum_burst` and
+    put the run straight back into the cooldowns the renewal just bought its way out of.
+    """
+    clock = _FakeClock()
+    budget = _renewing_budget(clock, lambda: True)
+
+    _spend_burst(budget, 6)
+    assert budget.observed_ceiling == 6
+
+    assert budget.request_permitted()
+    assert budget.observed_ceiling is None
+
+    for _ in range(50):
+        assert budget.request_permitted()
+        budget.record_success()
+    assert clock.slept == []
+
+
+@pytest.mark.unit
+def test_a_declined_renewal_falls_back_to_waiting_out_the_block() -> None:
+    """A renewal that cannot happen must not end a run that could still finish slowly."""
+    clock = _FakeClock()
+    budget = _renewing_budget(clock, lambda: False, cooldown_seconds=1500.0)
+
+    _spend_burst(budget, 6)
+
+    assert budget.request_permitted()
+    assert clock.slept == [1500.0]
+    assert budget.cooldowns_used == 1
+    assert budget.sessions_renewed == 0
+
+
+@pytest.mark.unit
+def test_a_run_that_can_renew_is_not_stopped_by_the_cooldown_allowance() -> None:
+    """The cooldown limits bound *waiting*; a renewal costs none, so they must not apply."""
+    clock = _FakeClock()
+    budget = _renewing_budget(clock, lambda: True, max_cooldowns=0)
+
+    _spend_burst(budget, 6)
+
+    assert budget.request_permitted()
+    assert budget.stop_reason is None
+    assert clock.slept == []
+
+
+@pytest.mark.unit
+def test_renewals_are_bounded_so_a_renewer_that_always_claims_success_cannot_spin() -> None:
+    """Nothing else bounds renewal: it consumes no cooldown and no wall clock."""
+    clock = _FakeClock()
+    attempts: list[int] = []
+
+    def always_succeeds() -> bool:
+        attempts.append(1)
+        return True
+
+    budget = _renewing_budget(
+        clock, always_succeeds, max_session_renewals=2, cooldown_seconds=1500.0
+    )
+
+    for _ in range(3):
+        _spend_burst(budget, 6)
+        assert budget.request_permitted()
+
+    assert len(attempts) == 2
+    assert budget.sessions_renewed == 2
+    # The third block found the renewal allowance spent and waited instead.
+    assert clock.slept == [1500.0]
+
+
+@pytest.mark.unit
+def test_a_budget_without_a_renewer_behaves_exactly_as_before() -> None:
+    """Unattended runs get the wait-only path; nothing about them may change."""
+    clock = _FakeClock()
+    budget = _budget(clock, cooldown_seconds=1500.0)
+
+    _spend_burst(budget, 6)
+
+    assert budget.request_permitted()
+    assert clock.slept == [1500.0]
+    assert budget.cooldowns_used == 1
+    assert budget.sessions_renewed == 0

@@ -7,9 +7,15 @@ changing networking, pacing, or pipeline code. `README.md` documents the CLI sur
 
 ## Running commands on this machine
 
-Corporate application control blocks unsigned native executables, so **always invoke tools as
-modules through the venv interpreter**, never via generated launchers (`pip.exe`, `ruff.exe`,
-`aruodas.exe`):
+**Always invoke tools as modules through the venv interpreter**, rather than via generated
+launchers (`pip.exe`, `ruff.exe`, `aruodas.exe`):
+
+> The original reason — corporate application control refusing unsigned native executables with
+> `WinError 1260` — no longer applies: as of 2026-08-21 `pip.exe --version` runs, user-mode code
+> integrity is not enforced, and Smart App Control is off. The convention is kept because it is
+> unambiguous and costs nothing, but it is no longer a hard constraint, and it must not be cited
+> as a reason that Playwright/Selenium are impossible here. See AGENTS.md 2026-08-21.
+
 
 ```bash
 PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m <tool> ...
@@ -92,7 +98,8 @@ online:   cities.yaml → discovery → search cards + bounded detail fetches �
 - The HTTP client allows only HTTPS to `aruodas.lt` / `www.aruodas.lt`; anything else is `RetrievalError`.
 - Online runs are **additive**: rows are merged by `listing_id` and never deleted. A card-only
   record still counts as owed a detail fetch, which is why repeat runs deepen the dataset.
-- `curl_cffi` is the production transport (`chrome131` impersonation). `httpx` has a detectable
+- `curl_cffi` is the production transport (`chrome146` impersonation, which must agree with the
+  browser that mints the cookie — see AGENTS.md 2026-08-21). `httpx` has a detectable
   fingerprint and is for tests/offline only. Keep `browser_profile._CHROME_MAJOR_VERSION` in step
   with `curl_fetcher.DEFAULT_IMPERSONATION`.
 - Never read a default off a slotted frozen dataclass class object (e.g. `DelayPolicy.minimum_seconds`

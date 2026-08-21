@@ -9,6 +9,8 @@ discovering it.
 
 from __future__ import annotations
 
+import os
+import secrets
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -87,10 +89,37 @@ def load_cookie_file(path: Path | None, now: float | None = None) -> BrowserCook
     )
 
 
+def write_cookie_file(path: Path, header: str) -> None:
+    """Replace the cookie file atomically, so no run ever reads a half-written header.
+
+    A partial header is worse than a missing one: it still parses, still looks like a cookie,
+    and simply buys a lower ceiling that would be blamed on the origin.
+
+    Raises:
+        ConfigurationError: If the header is empty, oversized, or cannot be written.
+    """
+    header = header.strip()
+    if not header:
+        raise ConfigurationError("Refusing to write an empty cookie file")
+    encoded = header.encode("utf-8")
+    if len(encoded) > MAX_COOKIE_BYTES:
+        raise ConfigurationError(f"Cookie exceeds {MAX_COOKIE_BYTES} bytes: {path}")
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with temporary.open("xb") as file_handle:
+            file_handle.write(encoded)
+        os.replace(temporary, path)
+    except OSError as error:
+        temporary.unlink(missing_ok=True)
+        raise ConfigurationError(f"Cookie file could not be written: {path}") from error
+
+
 __all__ = [
     "MAX_COOKIE_BYTES",
     "PROTECTION_COOKIE_NAME",
     "STALE_AFTER_SECONDS",
     "BrowserCookie",
     "load_cookie_file",
+    "write_cookie_file",
 ]

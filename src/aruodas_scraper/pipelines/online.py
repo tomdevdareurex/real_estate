@@ -296,6 +296,7 @@ def process_online(
     max_runtime_seconds: float | None = None,
     sleeper: Callable[[float], None] = time.sleep,
     shuffler: Callable[[list[DiscoveryRecord]], None] = secrets.SystemRandom().shuffle,
+    renewer: Callable[[], bool] | None = None,
 ) -> OnlineScrapeSummary:
     """Retrieve, parse, and export a bounded live snapshot.
 
@@ -326,6 +327,10 @@ def process_online(
         sleeper: Injected for tests, so the cooldown does not really elapse.
         shuffler: Randomises the order detail pages are visited in. Injected for tests, which
             need a deterministic request sequence.
+        renewer: Called when a burst is spent, to re-earn the session instead of waiting the
+            block out. Returning True means the block is gone and the run continues at once,
+            with the learned ceiling forgotten because it described the replaced session.
+            Left as None the run only waits, which is what an unattended run wants.
 
     Raises:
         RetrievalError: If the first search page is blocked for every selected category.
@@ -349,6 +354,7 @@ def process_online(
             max_runtime_seconds=max_runtime_seconds,
         ),
         sleeper=sleeper,
+        renewer=renewer,
     )
 
     started = datetime.now(UTC)

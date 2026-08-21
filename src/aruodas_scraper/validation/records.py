@@ -4,6 +4,8 @@ import csv
 from dataclasses import dataclass
 from pathlib import Path
 
+from aruodas_scraper.constants import CSV_ENCODING
+
 
 @dataclass(frozen=True, slots=True)
 class CsvValidationResult:
@@ -15,7 +17,7 @@ class CsvValidationResult:
 
 def validate_csv(path: Path) -> CsvValidationResult:
     """Validate required columns, identifiers, and duplicate listing IDs."""
-    with path.open(encoding="utf-8", newline="") as file_handle:
+    with path.open(encoding=CSV_ENCODING, newline="") as file_handle:
         reader = csv.DictReader(file_handle)
         required = {"listing_id", "canonical_url", "property_type"}
         missing = required.difference(reader.fieldnames or ())

@@ -63,6 +63,19 @@ scrape_live:
   max_empty_bursts: 2
   # max_runtime_seconds: 14400
 
+  # On a block, open a browser and wait for you to solve the challenge instead of sitting out
+  # the cooldown above. Solving clears the block immediately AND re-earns a much larger budget
+  # (~100+ requests against ~6), so this replaces a 25-minute wait with a click - and the run
+  # keeps its cache, its pacing and its progress instead of being restarted.
+  #
+  # The learned burst ceiling is forgotten on renewal, because it measured the cookie that was
+  # just replaced; carrying it over would cap the new session at 5-request bursts.
+  #
+  # Needs someone at the keyboard, so leave it off for unattended or CI runs - those fall back
+  # to waiting, exactly as before. A declined or failed renewal also falls back to waiting
+  # rather than ending the run.
+  solve_on_block: true
+
   refresh_cache: false
   # Re-fetch listings that are already in the export instead of skipping them. Left off,
   # because a run gets only about 5 requests per cooldown: re-fetching a detail page already
@@ -91,10 +104,17 @@ scrape_live:
   # produced the cookie.
   # user_agent: "..."
 
-  # Path to a file holding a Cookie header copied from a signed-in browser on this network
-  # (DevTools > Network > document request > Copy as cURL). The bot-protection cookie is
-  # minted by a JS sensor this client cannot run, so borrowing a browser session raises the
-  # request ceiling before the origin challenges again. It expires; re-copy when 403s return.
+  # Path to a file holding a Cookie header from a browser session on this network. Generate
+  # it with `python -m aruodas_scraper mint-cookie`, which opens Chrome, waits for you to
+  # solve any challenge, and writes this file for you; copying one out of DevTools by hand
+  # still works but is the slow path.
+  #
+  # HOW the cookie was earned decides the request ceiling, and by a lot. Measured 2026-08-22:
+  # a cookie from an ordinary browse was spent after ~6 requests, while one taken after a
+  # human solved the challenge carried a run past 100. So when a run dies at ~6 requests, the
+  # answer is to re-mint through a solved challenge - not to wait, and not to start changing
+  # the impersonation profile below.
+  #
   # Keep this file OUTSIDE the repository: it authenticates you to the origin.
   #
   # Alignment matters and pulls in two directions. The protection layer binds a session to
@@ -119,10 +139,21 @@ scrape_live:
   # is detectable no matter which headers it sends and is kept only for offline testing.
   transport: curl
 
-  # Chrome profile replayed by the curl transport. Newer is not better: chrome136 is
-  # rejected where chrome124 and chrome131 are accepted. Try another profile if 403s
-  # reappear.
-  impersonate: chrome131
+  # Chrome profile replayed by the curl transport. This has to AGREE with the browser that
+  # minted 'cookie_file' above: the protection layer binds a session to the identity that
+  # earned it, so a cookie from Chrome 151 replayed over a chrome131 handshake is a
+  # contradiction on every request - the exact signal the curl transport exists to remove.
+  # Check your browser's version (chrome://version) and pick the closest profile.
+  #
+  # The older note here said "newer is not better: chrome136 is rejected where chrome124 and
+  # chrome131 are accepted". That was measured cookie-free, where there is no minting identity
+  # to agree with; it does not carry over to a cookied run and is kept only so the experiment
+  # is not repeated blind.
+  #
+  # Available in curl_cffi 0.16.0: chrome131, chrome133a, chrome136, chrome142, chrome145,
+  # chrome146. If 403s reappear, step DOWN this list before changing anything else.
+  # Previous value: impersonate: chrome131
+  impersonate: chrome146
 
   # Only used by the httpx transport, where HTTP/2 adds a further mismatched fingerprint.
   http2: false

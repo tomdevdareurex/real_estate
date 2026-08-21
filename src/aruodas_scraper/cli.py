@@ -1,6 +1,7 @@
 """English command-line interface for offline"""
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, TypeVar
 
@@ -21,10 +22,16 @@ from aruodas_scraper.logging_config import configure_logging
 from aruodas_scraper.networking.browser_profile import DEFAULT_USER_AGENT, navigation_headers
 from aruodas_scraper.networking.budget import DEFAULT_MAX_COOLDOWNS, DEFAULT_MAX_EMPTY_BURSTS
 from aruodas_scraper.networking.cache import HtmlCache
+from aruodas_scraper.networking.cookie_minter import (
+    DEFAULT_MINT_TIMEOUT_SECONDS,
+    DEFAULT_MINT_URL,
+    mint_cookie,
+)
 from aruodas_scraper.networking.cookie_source import (
     PROTECTION_COOKIE_NAME,
     BrowserCookie,
     load_cookie_file,
+    write_cookie_file,
 )
 from aruodas_scraper.networking.curl_fetcher import DEFAULT_IMPERSONATION
 from aruodas_scraper.networking.http_client import AruodasHttpClient, FetchOptions, build_fetcher
@@ -109,6 +116,7 @@ _COMMAND_DEFAULTS: dict[str, dict[str, object]] = {
         "max_cooldowns": DEFAULT_MAX_COOLDOWNS,
         "max_empty_bursts": DEFAULT_MAX_EMPTY_BURSTS,
         "max_runtime_seconds": None,
+        "solve_on_block": False,
         "refresh_cache": False,
         "overwrite": False,
         "deepen": True,
@@ -297,6 +305,14 @@ def scrape_live_command(
             "A cooldown that would overrun the limit is not started at all.",
         ),
     ] = None,
+    solve_on_block: Annotated[
+        bool,
+        typer.Option(
+            help="On a block, open a browser and wait for you to solve the challenge instead "
+            "of waiting out the cooldown. Solving clears the block immediately, so this "
+            "turns a 25-minute wait into a click. Needs someone at the keyboard.",
+        ),
+    ] = False,
     refresh_cache: Annotated[bool, typer.Option()] = False,
     overwrite: Annotated[
         bool,
@@ -397,6 +413,9 @@ def scrape_live_command(
     max_empty_bursts = _resolve(
         "max_empty_bursts", max_empty_bursts, configured.max_empty_bursts if configured else None
     )
+    solve_on_block = _resolve(
+        "solve_on_block", solve_on_block, configured.solve_on_block if configured else None
+    )
     max_runtime_seconds = _resolve(
         "max_runtime_seconds",
         max_runtime_seconds,
@@ -431,9 +450,26 @@ def scrape_live_command(
     try:
         registry = load_city_registry(cities_config)
         registry.get_city(city)
+        if solve_on_block and cookie_file is None:
+            typer.echo(
+                "  --solve-on-block needs cookie_file set: the renewed session has to be "
+                "written somewhere, and the browser profile that remembers your solves "
+                "lives beside it.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
         cookie = load_cookie_file(cookie_file)
         _warn_about_cookie(cookie)
-        if cookie is not None and cookie.is_stale and not allow_stale_cookie and max_cooldowns > 0:
+        # A stale cookie is only fatal when waiting is the run's only recovery. With
+        # --solve-on-block the run can re-earn the session the moment the origin objects,
+        # so starting on an old cookie costs one block rather than hours of cooldowns.
+        if (
+            cookie is not None
+            and cookie.is_stale
+            and not allow_stale_cookie
+            and not solve_on_block
+            and max_cooldowns > 0
+        ):
             typer.echo(
                 f"  Refusing to start: this run may wait out up to {max_cooldowns} cooldown(s) "
                 "on a cookie that has probably already been rotated, which is hours spent for "
@@ -473,6 +509,11 @@ def scrape_live_command(
                 max_cooldowns=max_cooldowns,
                 max_empty_bursts=max_empty_bursts,
                 max_runtime_seconds=max_runtime_seconds,
+                renewer=(
+                    _build_session_renewer(client, cookie_file)
+                    if solve_on_block and cookie_file is not None
+                    else None
+                ),
             )
     except (ConfigurationError, RetrievalError, OSError, ValueError) as error:
         typer.echo(f"Live scrape failed: {error}", err=True)
@@ -489,6 +530,107 @@ def scrape_live_command(
         f"Skipped {summary.skipped_existing} already-exported listing(s). "
         f"Failed: {summary.failed}.{recovered}"
     )
+
+
+def _build_session_renewer(client: AruodasHttpClient, cookie_file: Path) -> Callable[[], bool]:
+    """Return the callback a blocked run uses to re-earn its session instead of waiting.
+
+    Waiting out a block restores the same small budget it just spent; solving a challenge
+    restores a much larger one and does it now. So the browser is opened at the moment the
+    origin objects, rather than leaving the operator to notice a stalled run.
+    """
+
+    def renew() -> bool:
+        typer.echo("")
+        typer.echo("  Blocked. Opening a browser so the block can be cleared now.")
+        try:
+            minted = mint_cookie(
+                profile_dir=cookie_file.parent / "browser_profile",
+                on_challenge=_announce_challenge,
+            )
+        except ConfigurationError as error:
+            # A failed renewal must not end the run: the cooldown is still there to fall
+            # back on, and finishing slowly beats not finishing.
+            typer.echo(f"  Could not renew the session ({error}).", err=True)
+            typer.echo("  Falling back to waiting out the block.", err=True)
+            return False
+        write_cookie_file(cookie_file, minted.header)
+        client.set_cookie(minted.header)
+        typer.echo(f"  Session renewed ({minted.describe()}). Continuing with no cooldown.")
+        typer.echo("")
+        return True
+
+    return renew
+
+
+def _announce_challenge() -> None:
+    """Tell the operator to solve the challenge, and why it is worth doing by hand."""
+    typer.echo("")
+    typer.echo("  A challenge appeared. Solve it in the browser window that just opened.")
+    typer.echo("  This is the step that buys the request budget: a cookie minted after a")
+    typer.echo("  solved challenge has been measured at 100+ requests, against about 6 for")
+    typer.echo("  one taken from an ordinary browse. Waiting for you...")
+    typer.echo("")
+
+
+@app.command("mint-cookie")
+def mint_cookie_command(
+    output: Annotated[
+        Path | None,
+        typer.Option(help="Where to write the cookie. Defaults to cookie_file from the config."),
+    ] = None,
+    url: Annotated[str, typer.Option(help="Page to open in the browser.")] = DEFAULT_MINT_URL,
+    profile_dir: Annotated[
+        Path | None,
+        typer.Option(help="Chrome profile that remembers solves. Defaults beside the cookie."),
+    ] = None,
+    timeout_seconds: Annotated[
+        float, typer.Option(min=10.0, max=1800.0, help="How long to wait for a solve.")
+    ] = DEFAULT_MINT_TIMEOUT_SECONDS,
+    config: Annotated[Path | None, _CONFIG_OPTION] = None,
+    no_config: Annotated[bool, _NO_CONFIG_OPTION] = False,
+) -> None:
+    """Open a browser, wait for the challenge to clear, and save the session cookie.
+
+    Replaces copying a Cookie header out of DevTools by hand. The browser is visible on
+    purpose: the challenge has to be solved by a person, and that solve is precisely what
+    raises the ceiling for the run that follows.
+    """
+    try:
+        settings = _effective_config(config, no_config)
+    except ConfigurationError as error:
+        typer.echo(f"Minting failed: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    configured = settings.scrape_live if settings else None
+
+    output = _resolve("cookie_file", output, configured.cookie_file if configured else None)
+    if output is None:
+        typer.echo(
+            "Nowhere to write the cookie: pass --output, or set cookie_file in the config.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    # Beside the cookie by default, which is already outside the repository and gitignored.
+    # The profile holds a live session and must not land anywhere that gets committed.
+    resolved_profile = profile_dir if profile_dir is not None else output.parent / "browser_profile"
+
+    typer.echo(f"Opening:  {url}")
+    typer.echo(f"Profile:  {resolved_profile}")
+    try:
+        minted = mint_cookie(
+            profile_dir=resolved_profile,
+            url=url,
+            timeout_seconds=timeout_seconds,
+            on_challenge=_announce_challenge,
+        )
+        write_cookie_file(output, minted.header)
+    except ConfigurationError as error:
+        typer.echo(f"Minting failed: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    typer.echo(f"Saved:    {output} ({minted.describe()})")
+    if not minted.solved_challenge:
+        typer.echo("No challenge was raised; the saved profile was still trusted.")
 
 
 @app.command("doctor")

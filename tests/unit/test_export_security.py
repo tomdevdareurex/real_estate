@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from aruodas_scraper.constants import CSV_ENCODING
 from aruodas_scraper.models import ListingRecord
 from aruodas_scraper.pipelines.export import write_records
 
@@ -25,6 +26,6 @@ def test_csv_export_neutralizes_formula_cells(tmp_path: Path, dangerous: str) ->
 
     write_records(output, [record])
 
-    with output.open(encoding="utf-8", newline="") as file_handle:
+    with output.open(encoding=CSV_ENCODING, newline="") as file_handle:
         row = next(csv.DictReader(file_handle))
     assert row["title_lt"].lstrip().startswith("'")

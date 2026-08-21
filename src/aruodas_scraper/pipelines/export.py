@@ -13,6 +13,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from aruodas_scraper.constants import CSV_ENCODING
 from aruodas_scraper.models import (
     FailedUrl,
     ListingRecord,
@@ -65,7 +66,7 @@ def read_records(path: Path) -> list[ListingRecord]:
         "diagnostic_warnings",
     }
     records: list[ListingRecord] = []
-    with path.open(encoding="utf-8", newline="") as file_handle:
+    with path.open(encoding=CSV_ENCODING, newline="") as file_handle:
         for row in csv.DictReader(file_handle):
             values: dict[str, Any] = {
                 key: (None if value == "" else value) for key, value in row.items()
@@ -81,7 +82,7 @@ def read_records(path: Path) -> list[ListingRecord]:
 def write_records(path: Path, records: Sequence[ListingRecord]) -> None:
     """Write listing records as UTF-8 CSV with a stable schema."""
     temporary = _atomic_path(path)
-    with temporary.open("x", encoding="utf-8", newline="") as file_handle:
+    with temporary.open("x", encoding=CSV_ENCODING, newline="") as file_handle:
         writer = csv.DictWriter(file_handle, fieldnames=CSV_FIELDS, extrasaction="ignore")
         writer.writeheader()
         for record in records:
@@ -104,7 +105,7 @@ def write_failures(path: Path, failures: Sequence[FailedUrl]) -> None:
     """Write failed inputs even when no failures occurred."""
     fields = ("url", "stage", "error_type", "message")
     temporary = _atomic_path(path)
-    with temporary.open("x", encoding="utf-8", newline="") as file_handle:
+    with temporary.open("x", encoding=CSV_ENCODING, newline="") as file_handle:
         writer = csv.DictWriter(file_handle, fieldnames=fields)
         writer.writeheader()
         writer.writerows(
@@ -130,7 +131,7 @@ def write_unknown_fields(path: Path, unknown_fields: Iterable[UnknownField]) -> 
         current["occurrences"] += 1
     fields = ("label_lt", "occurrences", "sample_value_lt", "sample_listing_url")
     temporary = _atomic_path(path)
-    with temporary.open("x", encoding="utf-8", newline="") as file_handle:
+    with temporary.open("x", encoding=CSV_ENCODING, newline="") as file_handle:
         writer = csv.DictWriter(file_handle, fieldnames=fields)
         writer.writeheader()
         writer.writerows(

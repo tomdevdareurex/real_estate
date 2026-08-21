@@ -176,6 +176,13 @@ class HttpxFetcher:
         """Drop cookies so the next attempt negotiates a fresh session."""
         self._client.cookies.clear()
 
+    def set_cookie(self, cookie: str) -> None:
+        """Adopt a newly minted browser session for every subsequent request."""
+        self._client.headers["Cookie"] = cookie
+        # Whatever httpx accumulated belongs to the session being replaced; sending both
+        # would put two generations of the same token on one request.
+        self._client.cookies.clear()
+
     def close(self) -> None:
         """Close the underlying connection pool."""
         self._client.close()
@@ -252,6 +259,13 @@ class AruodasHttpClient:
     def close(self) -> None:
         """Close the underlying HTTP client."""
         self._fetcher.close()
+
+    def set_cookie(self, cookie: str) -> None:
+        """Adopt a newly minted browser session mid-run, without rebuilding the client.
+
+        Rebuilding instead would drop the cache and the pacing state along with the block.
+        """
+        self._fetcher.set_cookie(cookie)
 
     def fetch(self, url: str, refresh: bool = False, referer: str | None = None) -> bytes:
         """Return one safe HTML response, using the exact URL as its cache key.

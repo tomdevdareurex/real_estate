@@ -34,6 +34,11 @@ DEFAULT_MAX_COOLDOWNS = 4
 # `_predicted_ceiling` then floors back up to `minimum_burst`.
 DEFAULT_MAX_EMPTY_BURSTS = 2
 
+# Renewing the session clears the block outright, so unlike a cooldown it costs nothing but
+# the operator's attention. This bound exists only to stop a renewer that always claims
+# success from looping; a person solving challenges will never approach it.
+DEFAULT_MAX_SESSION_RENEWALS = 10
+
 
 @dataclass(frozen=True, slots=True)
 class BudgetPolicy:
@@ -51,6 +56,10 @@ class BudgetPolicy:
     # Consecutive bursts that may serve nothing before the run concludes the origin is
     # refusing it outright rather than rationing it.
     max_empty_bursts: int = DEFAULT_MAX_EMPTY_BURSTS
+    # Renewals cost no waiting, so nothing else bounds them: without a ceiling a renewer that
+    # keeps reporting success while the origin keeps refusing would spin forever. Generous,
+    # because each real renewal needs a person to solve a challenge.
+    max_session_renewals: int = DEFAULT_MAX_SESSION_RENEWALS
 
     def __post_init__(self) -> None:
         if self.cooldown_seconds < 0:
@@ -65,6 +74,8 @@ class BudgetPolicy:
             raise ValueError("minimum_burst must be at least one")
         if self.max_empty_bursts < 1:
             raise ValueError("max_empty_bursts must be at least one")
+        if self.max_session_renewals < 0:
+            raise ValueError("max_session_renewals cannot be negative")
 
 
 class RequestBudget:
@@ -81,21 +92,32 @@ class RequestBudget:
         policy: BudgetPolicy | None = None,
         sleeper: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
+        renewer: Callable[[], bool] | None = None,
     ) -> None:
         self._policy = policy or BudgetPolicy()
         self._sleep = sleeper
         self._clock = clock
         self._started = clock()
+        # Offered a chance to re-earn the session when a burst is spent. Returns True if it
+        # did, in which case there is no block left to wait out. ``None`` restores the
+        # wait-only behaviour, which is what an unattended run wants.
+        self._renew = renewer
         self._burst_successes = 0
         self._blocked = False
         self._observed_ceiling: int | None = None
         self._cooldowns_used = 0
         self._empty_bursts = 0
+        self._sessions_renewed = 0
         self._stop_reason: str | None = None
 
     @property
     def cooldowns_used(self) -> int:
         return self._cooldowns_used
+
+    @property
+    def sessions_renewed(self) -> int:
+        """Blocks cleared by re-earning the session instead of waiting one out."""
+        return self._sessions_renewed
 
     @property
     def observed_ceiling(self) -> int | None:
@@ -140,6 +162,12 @@ class RequestBudget:
             return False
         if not self._burst_is_spent():
             return True
+        # Re-earning the session is offered before every limit below it, because all of those
+        # exist to bound *waiting* - they are the answer to "cooldowns cost 25 minutes each".
+        # A renewal costs none, so a run that can renew should never be stopped by a ceiling
+        # on how long it may wait, including on the pass where waiting has already failed.
+        if self._try_renewal():
+            return True
         # `_burst_successes` is only cleared inside `_cooldown`, so it still describes the
         # burst that just ended. A spent burst is either blocked or at its predicted ceiling,
         # and the ceiling is never below one, so zero here always means "served nothing".
@@ -165,11 +193,43 @@ class RequestBudget:
         self._cooldown()
         return True
 
+    def _try_renewal(self) -> bool:
+        """Offer the caller a chance to re-earn the session; report whether it did."""
+        if self._renew is None or self._sessions_renewed >= self._policy.max_session_renewals:
+            return False
+        if not self._renew():
+            return False
+        self._sessions_renewed += 1
+        logger.info(
+            "Session renewed after %d request(s) in this burst; continuing without a cooldown.",
+            self._burst_successes,
+        )
+        self.session_renewed()
+        return True
+
+    def session_renewed(self) -> None:
+        """Forget what the replaced session taught about the ceiling.
+
+        The learned ceiling describes the budget of one specific cookie, and cookies differ
+        enormously: an unsolved-challenge session is spent after about 6 requests where a
+        solved one runs past 100. Carrying a ceiling of 6 across a renewal would cap the new
+        session at `minimum_burst` bursts and send the run back into cooldowns it no longer
+        needs - which would waste most of what the renewal just bought.
+
+        `_empty_bursts` is deliberately *not* reset. It is the guard against renewals that
+        report success while the origin keeps refusing, and clearing it here would disarm the
+        one check that notices.
+        """
+        self._observed_ceiling = None
+        self._burst_successes = 0
+        self._blocked = False
+
     def _cooldown(self) -> None:
         self._cooldowns_used += 1
         logger.info(
             "Pausing %.0fs for cooldown %d/%d after %d request(s) in this burst. The block is "
-            "per source IP and self-clearing, so waiting is the only thing that restores it.",
+            "self-clearing, so waiting restores service - but re-earning the session clears "
+            "it now: run `mint-cookie` and solve the challenge to skip waits like this one.",
             self._policy.cooldown_seconds,
             self._cooldowns_used,
             self._policy.max_cooldowns,
@@ -204,6 +264,7 @@ __all__ = [
     "DEFAULT_COOLDOWN_SECONDS",
     "DEFAULT_MAX_COOLDOWNS",
     "DEFAULT_MAX_EMPTY_BURSTS",
+    "DEFAULT_MAX_SESSION_RENEWALS",
     "BudgetPolicy",
     "RequestBudget",
 ]
