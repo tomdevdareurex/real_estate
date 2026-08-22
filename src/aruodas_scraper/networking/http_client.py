@@ -267,6 +267,16 @@ class AruodasHttpClient:
         """
         self._fetcher.set_cookie(cookie)
 
+    def has_cached(self, url: str) -> bool:
+        """Whether ``fetch`` would answer from disk without contacting the origin.
+
+        Exists so a caller can tell the two cases apart *before* fetching. A cached page
+        costs no request, so charging it against a per-IP request budget - or counting it
+        as a page fetched - overstates both. That matters most on a resumed run, which
+        re-walks every page it already holds.
+        """
+        return self._cache.has(url)
+
     def fetch(self, url: str, refresh: bool = False, referer: str | None = None) -> bytes:
         """Return one safe HTML response, using the exact URL as its cache key.
 

@@ -10,8 +10,14 @@ from pathlib import Path
 import pytest
 
 from aruodas_scraper.constants import CSV_ENCODING
-from aruodas_scraper.models import FailedUrl, ListingRecord, UnknownField
+from aruodas_scraper.models import (
+    FailedUrl,
+    ListingRecord,
+    OnlineScrapeSummary,
+    UnknownField,
+)
 from aruodas_scraper.pipelines.export import (
+    append_run_history,
     read_records,
     write_failures,
     write_json,
@@ -164,3 +170,64 @@ def test_json_artifacts_are_left_without_a_mark(tmp_path: Path) -> None:
     assert not output.read_bytes().startswith(_BOM)
     # json.loads rejects a leading BOM outright, so this asserts the file stays consumable.
     assert json.loads(output.read_text(encoding="utf-8"))["note"] == _LITHUANIAN
+
+
+def _summary(**overrides: object) -> OnlineScrapeSummary:
+    values: dict[str, object] = {
+        "city": "vilnius",
+        "started_at_utc": datetime(2026, 8, 22, 10, 0, tzinfo=UTC),
+        "completed_at_utc": datetime(2026, 8, 22, 11, 0, tzinfo=UTC),
+        "search_pages_fetched": 20,
+        "listings_discovered": 500,
+        "listings_new": 500,
+        "apartments_exported": 300,
+        "houses_exported": 200,
+    }
+    values.update(overrides)
+    return OnlineScrapeSummary(**values)  # type: ignore[arg-type]
+
+
+@pytest.mark.unit
+def test_the_run_history_records_the_totals_a_single_summary_cannot(tmp_path: Path) -> None:
+    """scrape_summary.json is overwritten every run, so growth over months needs its own file."""
+    path = tmp_path / "run_history.csv"
+
+    append_run_history(path, _summary())
+
+    with path.open(encoding=CSV_ENCODING, newline="") as file_handle:
+        rows = list(csv.DictReader(file_handle))
+    assert len(rows) == 1
+    assert rows[0]["total_known"] == "500"
+    assert rows[0]["listings_new"] == "500"
+    assert rows[0]["search_pages_fetched"] == "20"
+
+
+@pytest.mark.unit
+def test_a_later_run_appends_without_destroying_the_earlier_one(tmp_path: Path) -> None:
+    """The whole point is the series; a run that overwrote it would answer nothing."""
+    path = tmp_path / "run_history.csv"
+
+    append_run_history(path, _summary())
+    append_run_history(
+        path,
+        _summary(
+            completed_at_utc=datetime(2026, 9, 1, 11, 0, tzinfo=UTC),
+            listings_new=37,
+            apartments_exported=320,
+            houses_exported=217,
+        ),
+    )
+
+    with path.open(encoding=CSV_ENCODING, newline="") as file_handle:
+        rows = list(csv.DictReader(file_handle))
+    assert [row["listings_new"] for row in rows] == ["500", "37"]
+    assert [row["total_known"] for row in rows] == ["500", "537"]
+
+
+@pytest.mark.unit
+def test_the_history_opens_in_excel_too(tmp_path: Path) -> None:
+    path = tmp_path / "run_history.csv"
+
+    append_run_history(path, _summary())
+
+    assert path.read_bytes().startswith(_BOM)

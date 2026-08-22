@@ -16,11 +16,11 @@ scrape_live:
   # already carrying price, price/m2, rooms, area, floor, year, heating, condition and
   # address. 20 pages is therefore ~500 records for 20 requests, which is roughly twice the
   # per-IP budget for a single burst and comfortably inside two cooldowns.
-  max_pages: 20
+  max_pages: 200
   # Detail pages are the expensive half: one request per listing, for the description,
   # coordinates, seller and engagement stats that no card carries. This caps only those
   # fetches - every listing seen in phase A is exported from its card regardless.
-  max_listings_per_category: 60
+  max_listings_per_category: 10000
   timeout_seconds: 30.0
 
   # Mean gap between requests; the actual delay is drawn uniformly from
@@ -61,6 +61,15 @@ scrape_live:
   # today - what it buys is a stop_reason that names the cause, and a bound that holds if
   # max_cooldowns is ever raised. Waste here scales with the allowance; this does not.
   max_empty_bursts: 2
+
+  # How many blocks solve_on_block may clear before the run gives up and falls back to
+  # waiting. Each renewal is worth roughly a burst (~100 requests on a solved challenge), so
+  # this is what really bounds an attended run: at the default of 10 a run stops after about
+  # a thousand requests, which is a top-up, not a full-city walk. Raised for the latter.
+  # Every renewal costs you one solved challenge, so this is also the honest upper bound on
+  # how many times you will be asked to click.
+  max_session_renewals: 200
+
   # max_runtime_seconds: 14400
 
   # On a block, open a browser and wait for you to solve the challenge instead of sitting out
@@ -75,6 +84,19 @@ scrape_live:
   # to waiting, exactly as before. A declined or failed renewal also falls back to waiting
   # rather than ending the run.
   solve_on_block: true
+
+  # Ask at the start which job this run should do: add details to listings already found, or
+  # walk search pages looking for new ones. The two compete for one per-IP request budget, so
+  # a run does one or the other, and `deepen` below decides silently when this is off.
+  #
+  # Asking also removes a trap. Left to itself the run deepens whenever ANY listing still
+  # lacks details - so a handful that can never be fetched (sold and removed, permanently
+  # 404) would keep discovery from ever running again, and every run would spend its requests
+  # re-trying corpses.
+  #
+  # Skipped when --deepen/--no-deepen is passed explicitly, and when there is no terminal to
+  # ask at, so unattended and CI runs are unaffected.
+  ask_phase: true
 
   refresh_cache: false
   # Re-fetch listings that are already in the export instead of skipping them. Left off,

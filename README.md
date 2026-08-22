@@ -67,7 +67,7 @@ outputs, checkpoints, and logs are ignored by `.gitignore`.
 | Command | Data source | Key options | What it does |
 |---|---|---|---|
 | `parse-offline` | Local HTML files (no network) | `--input`, `--property-type {apartments,houses,all}`, `--city`, `--output`, `--checkpoint`, `--resume`, `--refresh`, `--translate`, `--config`, `--no-config` | Parses already-downloaded listing-detail pages from a directory. `--property-type all` auto-classifies each file by its canonical URL (apartment vs house). `--input` is required unless the run configuration supplies it. |
-| `scrape-live` | Live aruodas.lt (rate-limited, cached) | `--cities-config`, `--city`, `--property-type {apartments,houses,all}`, `--output`, `--cache`, `--max-pages` (1-20), `--max-listings-per-category` (1-500), `--timeout-seconds` (1-120), `--solve-on-block`, `--refresh-cache`, `--overwrite`, `--deepen`/`--no-deepen`, `--config`, `--no-config` | Follows configured search pages and retrieves bounded listing-detail pages, producing the same normalized CSV/JSON as offline parsing. Deepens listings already held as search cards by default; `--no-deepen` walks the search pages to discover new ones. |
+| `scrape-live` | Live aruodas.lt (rate-limited, cached) | `--cities-config`, `--city`, `--property-type {apartments,houses,all}`, `--output`, `--cache`, `--max-pages` (1-500), `--max-listings-per-category` (1-20000), `--timeout-seconds` (1-120), `--solve-on-block`, `--refresh-cache`, `--overwrite`, `--deepen`/`--no-deepen`, `--config`, `--no-config` | Follows configured search pages and retrieves bounded listing-detail pages, producing the same normalized CSV/JSON as offline parsing. Deepens listings already held as search cards by default; `--no-deepen` walks the search pages to discover new ones. |
 | `mint-cookie` | A real Chrome window | `--output`, `--url`, `--profile-dir`, `--timeout-seconds` (10-1800), `--config`, `--no-config` | Opens Chrome, waits for you to solve any bot-protection challenge, then writes the session cookie to `cookie_file`. A solved challenge is what raises the request budget, so this is the fix for a run that dies after ~6 requests. Needs the optional `playwright` extra. |
 | `validate <csv_path>` | An exported CSV | — | Checks a CSV for duplicate listing IDs and reports total valid records. |
 | `report-unknown-fields` | `data/processed/unknown_fields.csv` | `--report` | Prints any Lithuanian attribute labels seen that aren't yet mapped in `field_mappings_lt_en.yaml`. |
@@ -308,6 +308,32 @@ after 4 cooldown(s)`, do not just wait it out — run `mint-cookie` and solve th
 clears the state immediately and is what restores the ceiling; waiting alone gives you back the
 same ~6-request budget you just spent.
 
+### Choosing what a run does
+
+Deepening and discovery compete for one request budget, so a run does one or the other. With
+`ask_phase: true` (or `--ask-phase`) the run asks at the start:
+
+```
+  Known so far: 998 publication(s), 828 still without details.
+
+  [1] Add details to 828 listing(s) you already found.
+      Description, coordinates, seller, engagement stats - none of which a
+      search card carries. Costs one request per listing. Finds nothing new.
+
+  [2] Look for new publications, walking up to 200 search page(s).
+      One request returns ~25 listings, so this is the cheap way to grow the
+      dataset. The new listings arrive as cards; details come on a later run.
+
+  Which [1]:
+```
+
+It is skipped when `--deepen`/`--no-deepen` is passed explicitly, when nothing is card-only,
+and when there is no terminal — so CI and unattended runs are unaffected.
+
+Asking also avoids a trap. Left to decide for itself, a run deepens whenever *any* listing
+lacks details. Listings sold and removed from Aruodas can never be fetched, and rows are
+never deleted, so a handful of those would keep discovery from ever running again.
+
 #### Skipping the wait entirely
 
 Better still, don't let the run stall in the first place:
@@ -375,7 +401,35 @@ data/processed/scrape_summary.json
 data/processed/data_quality_report.json
 data/processed/failed_urls.csv
 data/processed/unknown_fields.csv
+data/processed/run_history.csv        # online runs only, append-only
 ```
+
+### Tracking growth across runs
+
+`scrape_summary.json` is overwritten every run, so it only ever describes the last one.
+`run_history.csv` is **append-only** — one row per online run, and nothing deletes rows:
+
+| Column | Meaning |
+|---|---|
+| `total_known` | Publications in the export after this run — the running total |
+| `listings_new` | Listings whose ID had never been seen before — what this walk actually added |
+| `listings_discovered` | Cards seen this run, *including* ones already held — effort, not growth |
+| `search_pages_fetched` | Search pages the **origin served** — requests actually spent |
+| `detail_pages_fetched` | Detail pages the origin served |
+| `pages_served_from_cache` | Pages read from disk. Cost no request, charged nothing |
+
+`*_fetched` counts requests, never cache hits, so it can be compared directly against the
+per-IP budget. A resumed run re-walks everything it already holds, so it will show a large
+`pages_served_from_cache` and a small `search_pages_fetched` — that is the replay being free,
+not the run doing less.
+
+The distinction matters for scheduled re-runs. Walking the same pages ten days later re-sees
+nearly every card, so `listings_discovered` stays high while the dataset barely grows.
+**`listings_new` is the number that answers "what appeared since last time"**, and it falls
+to zero when the site has nothing new for you.
+
+Nothing is ever duplicated: records merge by `listing_id`, and a re-walk updates an existing
+row rather than adding a second one.
 
 CSV files have stable English headers. JSON-valued CSV columns are compact, deterministically
 ordered JSON strings. See [docs/data_dictionary.md](docs/data_dictionary.md).

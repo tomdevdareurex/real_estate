@@ -20,6 +20,15 @@ class HtmlCache:
         digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
         return self._directory / f"{digest}.html"
 
+    def has(self, key: str) -> bool:
+        """Whether a read would be served from disk, without reading the entry.
+
+        Callers use this to decide *before* fetching whether the origin will be involved,
+        which is what keeps a replay of already-cached pages from being charged against a
+        per-IP request budget it never touches.
+        """
+        return self._path(key).exists()
+
     def get(self, key: str, max_bytes: int | None = None) -> bytes | None:
         """Return cached bytes when present, optionally enforcing a read limit."""
         path = self._path(key)

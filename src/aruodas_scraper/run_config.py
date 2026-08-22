@@ -8,7 +8,11 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from aruodas_scraper.constants import MAX_CONFIG_BYTES
+from aruodas_scraper.constants import (
+    MAX_CONFIG_BYTES,
+    MAX_DETAIL_FETCHES_PER_CATEGORY,
+    MAX_SEARCH_PAGES,
+)
 from aruodas_scraper.exceptions import ConfigurationError
 
 PropertyTypeOption = Literal["apartments", "houses", "all"]
@@ -27,8 +31,10 @@ class ScrapeLiveOptions(BaseModel):
     property_type: PropertyTypeOption | None = None
     output: Path | None = None
     cache: Path | None = None
-    max_pages: int | None = Field(default=None, ge=1, le=20)
-    max_listings_per_category: int | None = Field(default=None, ge=1, le=500)
+    max_pages: int | None = Field(default=None, ge=1, le=MAX_SEARCH_PAGES)
+    max_listings_per_category: int | None = Field(
+        default=None, ge=1, le=MAX_DETAIL_FETCHES_PER_CATEGORY
+    )
     timeout_seconds: float | None = Field(default=None, ge=1.0, le=120.0)
     # Mean gap between requests; the actual wait is this give or take jitter_seconds.
     min_delay_seconds: float | None = Field(default=None, ge=0.0, le=600.0)
@@ -44,11 +50,19 @@ class ScrapeLiveOptions(BaseModel):
     # Consecutive bursts that may serve nothing before the run stops, so a block that is not
     # lapsing costs one cooldown rather than the whole allowance.
     max_empty_bursts: int | None = Field(default=None, ge=1, le=10)
+    # How many blocks solve_on_block may clear. Each renewal is worth roughly a burst, so
+    # this is what bounds an attended run: the default is sized for a top-up, and a
+    # full-city walk needs far more.
+    max_session_renewals: int | None = Field(default=None, ge=0, le=1000)
     max_runtime_seconds: float | None = Field(default=None, ge=1.0)
     # Open a browser on a block so the challenge can be solved, instead of waiting the block
     # out. Solving clears it immediately, so this replaces a 25-minute wait with a click.
     # Needs a person at the keyboard, which is why it is off unless asked for.
     solve_on_block: bool | None = None
+    # Ask at the start whether to add details to listings already found, or to walk search
+    # pages looking for new ones. The two compete for one request budget, so a run does one
+    # or the other; asking makes that choice visible instead of implied by `deepen`.
+    ask_phase: bool | None = None
     refresh_cache: bool | None = None
     overwrite: bool | None = None
     deepen: bool | None = None

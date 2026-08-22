@@ -85,8 +85,8 @@ parse_offline:
     [
         "schema_version: 1\nscrape_live:\n  unknown_key: 1\n",
         "schema_version: 1\nscrape_live:\n  max_pages: 0\n",
-        "schema_version: 1\nscrape_live:\n  max_pages: 21\n",
-        "schema_version: 1\nscrape_live:\n  max_listings_per_category: 501\n",
+        "schema_version: 1\nscrape_live:\n  max_pages: 501\n",
+        "schema_version: 1\nscrape_live:\n  max_listings_per_category: 20001\n",
         "schema_version: 1\nscrape_live:\n  timeout_seconds: 0.5\n",
         "schema_version: 1\nscrape_live:\n  jitter_seconds: 61\n",
         "schema_version: 1\nscrape_live:\n  jitter_seconds: -1\n",
@@ -163,3 +163,23 @@ def test_default_command_reflects_the_enabled_section(
     config = load_run_config(_write(tmp_path / "scrape.yaml", content))
 
     assert config.default_command == expected
+
+
+@pytest.mark.unit
+def test_a_whole_city_traversal_fits_inside_the_configuration_bounds(tmp_path: Path) -> None:
+    """The old 20/500 caps stopped a full Vilnius export at roughly one 20-page sweep.
+
+    They were guardrails against a typo, not limits the origin imposes, so they must not be
+    what decides how much of a city can be collected.
+    """
+    path = _write(
+        tmp_path / "scrape.yaml",
+        "schema_version: 1\nscrape_live:\n  max_pages: 200\n"
+        "  max_listings_per_category: 10000\n",
+    )
+
+    config = load_run_config(path)
+
+    assert config.scrape_live is not None
+    assert config.scrape_live.max_pages == 200
+    assert config.scrape_live.max_listings_per_category == 10000

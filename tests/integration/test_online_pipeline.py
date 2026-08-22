@@ -8,6 +8,7 @@ import pytest
 import respx
 
 from aruodas_scraper.cities import load_city_registry
+from aruodas_scraper.constants import CSV_ENCODING
 from aruodas_scraper.exceptions import ProxyAuthenticationError, RetrievalError
 from aruodas_scraper.networking.cache import HtmlCache
 from aruodas_scraper.networking.http_client import AruodasHttpClient, FetchOptions
@@ -59,6 +60,9 @@ def test_online_pipeline_discovers_parses_and_exports_bounded_listing(
         "data_quality_report.json",
         "failed_urls.csv",
         "unknown_fields.csv",
+        # Appended to rather than overwritten, so the growth of the dataset stays readable
+        # after scrape_summary.json has been replaced by the next run.
+        "run_history.csv",
     }
 
     with (output_directory / "apartments_vilnius.csv").open(
@@ -171,7 +175,7 @@ def _run(tmp_path: Path, cache_name: str, **overrides: object) -> object:
 
 
 def _rows(path: Path) -> list[dict[str, str]]:
-    with path.open(encoding="utf-8", newline="") as file_handle:
+    with path.open(encoding=CSV_ENCODING, newline="") as file_handle:
         return list(csv.DictReader(file_handle))
 
 
@@ -855,3 +859,76 @@ def test_online_pipeline_refuses_to_run_against_an_unreadable_export(tmp_path: P
 
     with pytest.raises(ValueError, match="--overwrite"):
         _run(tmp_path, "cache-one")
+
+
+@pytest.mark.integration
+@respx.mock
+def test_a_repeat_walk_over_the_same_pages_reports_no_new_publications(tmp_path: Path) -> None:
+    # The question a scheduled re-run has to answer is "what appeared since last time", and
+    # `listings_discovered` cannot answer it: a second walk re-sees every card it saw before,
+    # so that count stays high while the dataset stops growing. `listings_new` is the one
+    # that falls to zero, and the run history is where that series is kept.
+    respx.get(SEARCH_URL).mock(
+        return_value=httpx.Response(
+            200, content=Path("tests/fixtures/html/search_cards_apartments.html").read_bytes()
+        )
+    )
+    respx.get(DETAIL_URL).mock(
+        return_value=httpx.Response(
+            200, content=Path("tests/fixtures/html/apartment_detail.html").read_bytes()
+        )
+    )
+    # The second walk finds the first listing already detailed and reaches for the other one.
+    # Refusing it keeps this test about counting rather than about parsing a second fixture.
+    respx.get(SECOND_DETAIL_URL).mock(return_value=httpx.Response(403))
+
+    first = _run(tmp_path, "cache-one", deepen=False, max_listings_per_category=1)
+    second = _run(tmp_path, "cache-two", deepen=False, max_listings_per_category=1)
+
+    assert first.listings_new == 2  # type: ignore[attr-defined]
+    assert second.listings_new == 0  # type: ignore[attr-defined]
+    # Effort was identical both times; only the growth differs.
+    assert second.listings_discovered == first.listings_discovered  # type: ignore[attr-defined]
+
+    history = _rows(tmp_path / "processed" / "run_history.csv")
+    assert [row["listings_new"] for row in history] == ["2", "0"]
+    assert [row["total_known"] for row in history] == ["2", "2"]
+
+
+@pytest.mark.integration
+@respx.mock
+def test_replaying_cached_pages_costs_no_request_and_is_not_counted_as_one(
+    tmp_path: Path,
+) -> None:
+    # A run that dies mid-walk keeps no record of the page it reached, so the next one starts
+    # at page 1 and replays everything already on disk. Those pages never reach the origin, so
+    # charging them against the per-IP budget would spend a whole burst before the walk got
+    # back to new ground - and reporting them as "fetched" would overstate what the run cost.
+    # Both runs share one cache directory, which is what makes the second a replay.
+    search = respx.get(SEARCH_URL).mock(
+        return_value=httpx.Response(
+            200, content=Path("tests/fixtures/html/search_cards_apartments.html").read_bytes()
+        )
+    )
+    detail = respx.get(DETAIL_URL).mock(
+        return_value=httpx.Response(
+            200, content=Path("tests/fixtures/html/apartment_detail.html").read_bytes()
+        )
+    )
+    respx.get(SECOND_DETAIL_URL).mock(return_value=httpx.Response(403))
+
+    first = _run(tmp_path, "shared-cache", deepen=False, max_listings_per_category=1)
+    second = _run(tmp_path, "shared-cache", deepen=False, max_listings_per_category=1)
+
+    # The origin saw the search page once, no matter that it was walked twice.
+    assert search.call_count == 1
+    assert detail.call_count == 1
+
+    assert first.search_pages_fetched == 1  # type: ignore[attr-defined]
+    assert first.pages_served_from_cache == 0  # type: ignore[attr-defined]
+
+    # The replay is free, and says so.
+    assert second.search_pages_fetched == 0  # type: ignore[attr-defined]
+    assert second.pages_served_from_cache >= 1  # type: ignore[attr-defined]
+    # The cards are still parsed out of the cached page, so the walk really did continue.
+    assert second.listings_discovered == first.listings_discovered  # type: ignore[attr-defined]

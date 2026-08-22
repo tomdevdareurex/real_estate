@@ -30,6 +30,7 @@ from aruodas_scraper.models import (
 )
 from aruodas_scraper.networking.budget import (
     DEFAULT_MAX_EMPTY_BURSTS,
+    DEFAULT_MAX_SESSION_RENEWALS,
     BudgetPolicy,
     RequestBudget,
 )
@@ -38,6 +39,7 @@ from aruodas_scraper.parsers.apartment import parse_apartment
 from aruodas_scraper.parsers.house import parse_house
 from aruodas_scraper.parsers.search_card import parse_search_cards
 from aruodas_scraper.pipelines.export import (
+    append_run_history,
     read_records,
     write_failures,
     write_json,
@@ -114,7 +116,7 @@ class _ListingOutcome:
     fetched: bool = False
 
 
-def _selected_categories(property_type: str) -> tuple[PropertyCategory, ...]:
+def selected_categories(property_type: str) -> tuple[PropertyCategory, ...]:
     if property_type == "all":
         return ("apartments", "houses")
     if property_type in {"apartments", "houses"}:
@@ -293,6 +295,7 @@ def process_online(
     retry_cooldown_seconds: float = DEFAULT_RETRY_COOLDOWN_SECONDS,
     max_cooldowns: int = 4,
     max_empty_bursts: int = DEFAULT_MAX_EMPTY_BURSTS,
+    max_session_renewals: int = DEFAULT_MAX_SESSION_RENEWALS,
     max_runtime_seconds: float | None = None,
     sleeper: Callable[[float], None] = time.sleep,
     shuffler: Callable[[list[DiscoveryRecord]], None] = secrets.SystemRandom().shuffle,
@@ -320,6 +323,10 @@ def process_online(
         max_empty_bursts: How many consecutive bursts may serve nothing before the run gives
             up. Guards against spending the whole cooldown allowance on a block that is not
             lapsing, which yields no pages at 25 minutes apiece.
+        max_session_renewals: How many times ``renewer`` may clear a block. Each renewal is
+            roughly a burst's worth of requests, so this is what bounds the length of an
+            attended run - raise it for a full-city walk, which needs far more than the
+            default.
         deepen: Spend the run on listings the export holds only as search cards, skipping
             phase A entirely. Falls back to a normal search walk when there are none, so a
             cold start still works. Turn it off to go discovering new listings instead.
@@ -351,6 +358,7 @@ def process_online(
             # the caller asking for no waiting at all.
             max_cooldowns=0 if retry_cooldown_seconds == 0 else max_cooldowns,
             max_empty_bursts=max_empty_bursts,
+            max_session_renewals=max_session_renewals,
             max_runtime_seconds=max_runtime_seconds,
         ),
         sleeper=sleeper,
@@ -363,6 +371,7 @@ def process_online(
     unknown_fields: list[UnknownField] = []
     failures: list[FailedUrl] = []
     search_pages_fetched = 0
+    pages_served_from_cache = 0
     listings_discovered = 0
     detail_pages_fetched = 0
     skipped_existing = 0
@@ -371,7 +380,7 @@ def process_online(
     deferred_retries_attempted = 0
     deferred_retries_recovered = 0
 
-    categories = _selected_categories(property_type)
+    categories = selected_categories(property_type)
     existing_records: dict[PropertyCategory, list[ListingRecord]] = {}
     for category in categories:
         definition = city_registry.get_category(city, category)
@@ -383,6 +392,13 @@ def process_online(
             if not overwrite:
                 raise
             existing_records[category] = []
+
+    # Snapshotted before anything is collected, because `existing_records` is what the run
+    # merges into: comparing against it afterwards is what separates "walked past a listing
+    # again" from "found one we had never seen".
+    known_listing_ids = {
+        record.listing_id for group in existing_records.values() for record in group
+    }
 
     def flush() -> None:
         """Persist everything collected so far, overwriting the previous flush.
@@ -454,7 +470,13 @@ def process_online(
         while current_url is not None and page_number <= max_pages:
             if current_url in state.visited_urls:
                 break
-            if not budget.request_permitted():
+            # A page already on disk involves the origin not at all, so it must neither ask
+            # the budget for permission - which can block for a ~25 minute cooldown - nor be
+            # recorded as a request spent. A run resuming a deep walk replays every page it
+            # already holds, and charging for that replay would spend the whole burst before
+            # reaching a single page it has yet to see.
+            from_cache = not refresh_cache and client.has_cached(current_url)
+            if not from_cache and not budget.request_permitted():
                 failures.append(
                     FailedUrl(
                         url=current_url,
@@ -492,8 +514,11 @@ def process_online(
                 logger.warning("[%s] FAILED search page %s: %s", category, current_url, error)
                 break
 
-            budget.record_success()
-            search_pages_fetched += 1
+            if from_cache:
+                pages_served_from_cache += 1
+            else:
+                budget.record_success()
+                search_pages_fetched += 1
             search_referer = current_url
             page_attempts = 0
             result = discover_listing_links(
@@ -571,12 +596,15 @@ def process_online(
     processed = 0
     while pending:
         item, attempts = pending.popleft()
-        if budget.burst_is_spent and processed:
+        # Same reasoning as phase A: a listing already on disk costs no request, so it must
+        # not buy a cooldown or consume a slot of the burst.
+        from_cache = not refresh_cache and client.has_cached(item.listing.canonical_url)
+        if not from_cache and budget.burst_is_spent and processed:
             # Bank the burst before the cooldown rather than after it. The wait is ~25 minutes,
             # so it is where a run is most likely to be killed, and rows held in memory across
             # it are rows the export loses.
             flush()
-        if not budget.request_permitted():
+        if not from_cache and not budget.request_permitted():
             pending.appendleft((item, attempts))
             break
         if attempts:
@@ -587,8 +615,11 @@ def process_online(
         )
         processed += 1
         if outcome.fetched:
-            detail_pages_fetched += 1
-            budget.record_success()
+            if from_cache:
+                pages_served_from_cache += 1
+            else:
+                detail_pages_fetched += 1
+                budget.record_success()
         failure = outcome.failure
         if failure is None:
             if outcome.record is not None:
@@ -635,12 +666,15 @@ def process_online(
         write_records(output_directory / definition.output_filename, records)
 
     all_records = [*final_apartments, *final_houses]
+    listings_new = sum(1 for record in all_records if record.listing_id not in known_listing_ids)
     summary = OnlineScrapeSummary(
         city=city,
         started_at_utc=started,
         completed_at_utc=datetime.now(UTC),
         search_pages_fetched=search_pages_fetched,
+        pages_served_from_cache=pages_served_from_cache,
         listings_discovered=listings_discovered,
+        listings_new=listings_new,
         detail_pages_fetched=detail_pages_fetched,
         apartments_exported=len(final_apartments),
         houses_exported=len(final_houses),
@@ -651,10 +685,11 @@ def process_online(
         deferred_retries_recovered=deferred_retries_recovered,
     )
     write_summary(output_directory / "scrape_summary.json", summary)
+    append_run_history(output_directory / "run_history.csv", summary)
     write_json(output_directory / "data_quality_report.json", build_quality_report(all_records))
     write_failures(output_directory / "failed_urls.csv", failures)
     write_unknown_fields(output_directory / "unknown_fields.csv", unknown_fields)
     return summary
 
 
-__all__ = ["DEFAULT_RETRY_COOLDOWN_SECONDS", "process_online"]
+__all__ = ["DEFAULT_RETRY_COOLDOWN_SECONDS", "process_online", "selected_categories"]

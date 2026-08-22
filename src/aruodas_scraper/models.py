@@ -188,8 +188,21 @@ class OnlineScrapeSummary(BaseModel):
     city: str
     started_at_utc: datetime
     completed_at_utc: datetime
+    # Pages the origin actually served. A page answered from the local cache is counted in
+    # `pages_served_from_cache` instead, so this stays a true count of requests spent and
+    # can be compared against the per-IP budget.
     search_pages_fetched: int = 0
+    # Pages read from disk instead of requested. High on a resumed run, which re-walks
+    # everything it already holds before reaching new ground.
+    pages_served_from_cache: int = 0
+    # Cards seen during this run's search walk, INCLUDING listings already in the export.
+    # A repeat walk over the same pages re-sees nearly all of them, so this measures effort,
+    # not growth.
     listings_discovered: int = 0
+    # Listings whose ID was not in the export before this run started - the growth a walk
+    # actually bought. On a second walk of the same pages this is what drops towards zero,
+    # which is how "the site has nothing new for us" becomes visible.
+    listings_new: int = 0
     detail_pages_fetched: int = 0
     apartments_exported: int = 0
     houses_exported: int = 0

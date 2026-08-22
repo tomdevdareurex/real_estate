@@ -147,3 +147,59 @@ def write_unknown_fields(path: Path, unknown_fields: Iterable[UnknownField]) -> 
 def write_summary(path: Path, summary: ScrapeSummary | OnlineScrapeSummary) -> None:
     """Write the run summary JSON artifact."""
     write_json(path, summary)
+
+
+RUN_HISTORY_FIELDS = (
+    "completed_at_utc",
+    "city",
+    "search_pages_fetched",
+    "listings_discovered",
+    "listings_new",
+    "total_known",
+    "apartments_exported",
+    "houses_exported",
+    "detail_pages_fetched",
+    "pages_served_from_cache",
+    "failed",
+)
+
+
+def append_run_history(path: Path, summary: OnlineScrapeSummary) -> None:
+    """Append one row per run to a permanent log of how the dataset has grown.
+
+    `scrape_summary.json` is overwritten every run, so it can only ever answer "how did the
+    last run go". The question worth asking over months is a different one - how many
+    publications are known, and how many each walk actually added - and that needs a record
+    no run destroys. Rows are only ever appended; nothing here is recalculated from the
+    export, so a row stays true even after the CSV is deepened or re-walked later.
+
+    Existing rows are read and rewritten rather than appended in place, so the file lands
+    atomically like every other artifact and an interrupted run cannot leave it half-written.
+    One row per run keeps it small enough that this never matters.
+    """
+    existing: list[dict[str, str]] = []
+    if path.is_file():
+        with path.open(encoding=CSV_ENCODING, newline="") as file_handle:
+            existing = list(csv.DictReader(file_handle))
+    row = {
+        "completed_at_utc": summary.completed_at_utc.isoformat(),
+        "city": summary.city,
+        "search_pages_fetched": summary.search_pages_fetched,
+        "listings_discovered": summary.listings_discovered,
+        "listings_new": summary.listings_new,
+        "total_known": summary.apartments_exported + summary.houses_exported,
+        "apartments_exported": summary.apartments_exported,
+        "houses_exported": summary.houses_exported,
+        "detail_pages_fetched": summary.detail_pages_fetched,
+        "pages_served_from_cache": summary.pages_served_from_cache,
+        "failed": summary.failed,
+    }
+    temporary = _atomic_path(path)
+    with temporary.open("x", encoding=CSV_ENCODING, newline="") as file_handle:
+        writer = csv.DictWriter(
+            file_handle, fieldnames=RUN_HISTORY_FIELDS, extrasaction="ignore", restval=""
+        )
+        writer.writeheader()
+        writer.writerows(existing)
+        writer.writerow(row)
+    os.replace(temporary, path)

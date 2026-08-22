@@ -1,6 +1,7 @@
 """English command-line interface for offline"""
 
 import os
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, TypeVar
@@ -10,17 +11,23 @@ import typer
 import yaml
 from click.core import ParameterSource
 
-from aruodas_scraper.cities import load_city_registry
+from aruodas_scraper.cities import CityRegistry, load_city_registry
 from aruodas_scraper.constants import (
     DEFAULT_CACHE_DIRECTORY,
     DEFAULT_CHECKPOINT,
     DEFAULT_OUTPUT_DIRECTORY,
     DEFAULT_RUN_CONFIG,
+    MAX_DETAIL_FETCHES_PER_CATEGORY,
+    MAX_SEARCH_PAGES,
 )
 from aruodas_scraper.exceptions import ConfigurationError, RetrievalError
 from aruodas_scraper.logging_config import configure_logging
 from aruodas_scraper.networking.browser_profile import DEFAULT_USER_AGENT, navigation_headers
-from aruodas_scraper.networking.budget import DEFAULT_MAX_COOLDOWNS, DEFAULT_MAX_EMPTY_BURSTS
+from aruodas_scraper.networking.budget import (
+    DEFAULT_MAX_COOLDOWNS,
+    DEFAULT_MAX_EMPTY_BURSTS,
+    DEFAULT_MAX_SESSION_RENEWALS,
+)
 from aruodas_scraper.networking.cache import HtmlCache
 from aruodas_scraper.networking.cookie_minter import (
     DEFAULT_MINT_TIMEOUT_SECONDS,
@@ -43,7 +50,12 @@ from aruodas_scraper.networking.rate_limiter import (
 )
 from aruodas_scraper.networking.tls import resolve_tls_trust
 from aruodas_scraper.pipelines.all_properties import process_offline
-from aruodas_scraper.pipelines.online import DEFAULT_RETRY_COOLDOWN_SECONDS, process_online
+from aruodas_scraper.pipelines.export import read_records
+from aruodas_scraper.pipelines.online import (
+    DEFAULT_RETRY_COOLDOWN_SECONDS,
+    process_online,
+    selected_categories,
+)
 from aruodas_scraper.run_config import RunConfig, load_run_config
 from aruodas_scraper.validation.records import validate_csv
 
@@ -115,8 +127,10 @@ _COMMAND_DEFAULTS: dict[str, dict[str, object]] = {
         "retry_cooldown_seconds": DEFAULT_RETRY_COOLDOWN_SECONDS,
         "max_cooldowns": DEFAULT_MAX_COOLDOWNS,
         "max_empty_bursts": DEFAULT_MAX_EMPTY_BURSTS,
+        "max_session_renewals": DEFAULT_MAX_SESSION_RENEWALS,
         "max_runtime_seconds": None,
         "solve_on_block": False,
+        "ask_phase": False,
         "refresh_cache": False,
         "overwrite": False,
         "deepen": True,
@@ -248,8 +262,25 @@ def scrape_live_command(
     property_type: Annotated[str, typer.Option(help="apartments, houses, or all")] = "all",
     output: Annotated[Path, typer.Option()] = Path(DEFAULT_OUTPUT_DIRECTORY),
     cache: Annotated[Path, typer.Option()] = Path(DEFAULT_CACHE_DIRECTORY),
-    max_pages: Annotated[int, typer.Option(min=1, max=20)] = 1,
-    max_listings_per_category: Annotated[int, typer.Option(min=1, max=500)] = 20,
+    max_pages: Annotated[
+        int,
+        typer.Option(
+            min=1,
+            max=MAX_SEARCH_PAGES,
+            help="Search pages to walk per category. One page yields ~25 listing cards, so "
+            "this is the cheap half of a run. Ignored entirely when --deepen is on, which "
+            "skips the search walk.",
+        ),
+    ] = 1,
+    max_listings_per_category: Annotated[
+        int,
+        typer.Option(
+            min=1,
+            max=MAX_DETAIL_FETCHES_PER_CATEGORY,
+            help="Detail pages to fetch per category. One request each, for the description, "
+            "coordinates and seller stats no card carries.",
+        ),
+    ] = 20,
     timeout_seconds: Annotated[float, typer.Option(min=1.0, max=120.0)] = 30.0,
     min_delay_seconds: Annotated[
         float,
@@ -305,6 +336,24 @@ def scrape_live_command(
             "A cooldown that would overrun the limit is not started at all.",
         ),
     ] = None,
+    max_session_renewals: Annotated[
+        int,
+        typer.Option(
+            min=0,
+            max=1000,
+            help="How many blocks --solve-on-block may clear before the run falls back to "
+            "waiting. Each renewal is worth roughly a burst of requests, so raise this for "
+            "a full-city walk; the default is sized for a top-up.",
+        ),
+    ] = DEFAULT_MAX_SESSION_RENEWALS,
+    ask_phase: Annotated[
+        bool,
+        typer.Option(
+            help="Ask at the start whether to add details to listings already found, or "
+            "to walk search pages looking for new ones. Skipped when --deepen/--no-deepen "
+            "is given explicitly, and when there is no terminal to ask at.",
+        ),
+    ] = False,
     solve_on_block: Annotated[
         bool,
         typer.Option(
@@ -413,6 +462,12 @@ def scrape_live_command(
     max_empty_bursts = _resolve(
         "max_empty_bursts", max_empty_bursts, configured.max_empty_bursts if configured else None
     )
+    max_session_renewals = _resolve(
+        "max_session_renewals",
+        max_session_renewals,
+        configured.max_session_renewals if configured else None,
+    )
+    ask_phase = _resolve("ask_phase", ask_phase, configured.ask_phase if configured else None)
     solve_on_block = _resolve(
         "solve_on_block", solve_on_block, configured.solve_on_block if configured else None
     )
@@ -450,6 +505,15 @@ def scrape_live_command(
     try:
         registry = load_city_registry(cities_config)
         registry.get_city(city)
+        context = click.get_current_context(silent=True)
+        chosen_explicitly = (
+            context is not None
+            and context.get_parameter_source("deepen") is ParameterSource.COMMANDLINE
+        )
+        # Never block an unattended run on a question nobody is there to answer: without a
+        # terminal the configured `deepen` stands, which is the behaviour CI already relies on.
+        if ask_phase and not chosen_explicitly and sys.stdin.isatty():
+            deepen = _choose_deepen(deepen, output, registry, city, property_type, max_pages)
         if solve_on_block and cookie_file is None:
             typer.echo(
                 "  --solve-on-block needs cookie_file set: the renewed session has to be "
@@ -508,6 +572,7 @@ def scrape_live_command(
                 retry_cooldown_seconds=retry_cooldown_seconds,
                 max_cooldowns=max_cooldowns,
                 max_empty_bursts=max_empty_bursts,
+                max_session_renewals=max_session_renewals,
                 max_runtime_seconds=max_runtime_seconds,
                 renewer=(
                     _build_session_renewer(client, cookie_file)
@@ -524,12 +589,93 @@ def scrape_live_command(
             f" Recovered {summary.deferred_retries_recovered} of "
             f"{summary.deferred_retries_attempted} blocked listing(s) after the cooldown."
         )
+    total_known = summary.apartments_exported + summary.houses_exported
     typer.echo(
         f"Exported {summary.apartments_exported} apartment(s) and "
         f"{summary.houses_exported} house(s). "
         f"Skipped {summary.skipped_existing} already-exported listing(s). "
         f"Failed: {summary.failed}.{recovered}"
     )
+    typer.echo(f"Total publications known: {total_known}")
+    # Named separately from the fetch counts because they are not the same currency: only
+    # requests are charged against the per-IP budget, and a resumed run is mostly cache.
+    requested = summary.search_pages_fetched + summary.detail_pages_fetched
+    typer.echo(
+        f"Requests spent: {requested} "
+        f"({summary.search_pages_fetched} search + {summary.detail_pages_fetched} detail); "
+        f"{summary.pages_served_from_cache} page(s) served from cache, costing none."
+    )
+    if summary.search_pages_fetched or summary.pages_served_from_cache:
+        # Only meaningful after a search walk. A deepening run touches no search page, so it
+        # can only ever report zero new listings, which would read as "the site had nothing".
+        typer.echo(
+            f"New this run: {summary.listings_new} "
+            f"(walked {summary.search_pages_fetched} search page(s), "
+            f"saw {summary.listings_discovered} card(s))"
+        )
+    typer.echo(f"History: {output / 'run_history.csv'}")
+
+
+def _count_card_only(
+    output: Path, registry: CityRegistry, city: str, property_type: str
+) -> tuple[int, int]:
+    """Return (publications known, of those still holding only a search card).
+
+    Read from the export rather than recomputed, because the export is what the run itself
+    treats as the to-do list: a row with only a card is a row still owed a detail fetch.
+    """
+    total = 0
+    card_only = 0
+    for category in selected_categories(property_type):
+        path = output / registry.get_category(city, category).output_filename
+        if not path.is_file():
+            continue
+        try:
+            records = read_records(path)
+        except (OSError, UnicodeError, ValueError):
+            # The run itself reports this properly a moment later; a prompt is the wrong
+            # place to fail, so it simply offers no counts for that file.
+            continue
+        total += len(records)
+        card_only += sum(1 for record in records if record.record_source == "search")
+    return total, card_only
+
+
+def _choose_deepen(
+    deepen: bool,
+    output: Path,
+    registry: CityRegistry,
+    city: str,
+    property_type: str,
+    max_pages: int,
+) -> bool:
+    """Ask which job this run should do, when there is a real choice and someone to ask.
+
+    The two phases compete for one per-IP request budget, so a run does one or the other.
+    Left to itself the run deepens whenever any card-only row exists - which is usually
+    right, but means a handful of listings that can never be fetched (sold and removed, so
+    permanently 404) would keep discovery from ever running again. Asking removes that trap
+    and makes the choice visible instead of implied by a config flag.
+    """
+    total, card_only = _count_card_only(output, registry, city, property_type)
+    if card_only == 0:
+        # Nothing to deepen, so there is no choice to offer.
+        return deepen
+    typer.echo("")
+    typer.echo(f"  Known so far: {total} publication(s), {card_only} still without details.")
+    typer.echo("")
+    typer.echo(f"  [1] Add details to {card_only} listing(s) you already found.")
+    typer.echo("      Description, coordinates, seller, engagement stats - none of which a")
+    typer.echo("      search card carries. Costs one request per listing. Finds nothing new.")
+    typer.echo("")
+    typer.echo(f"  [2] Look for new publications, walking up to {max_pages} search page(s).")
+    typer.echo("      One request returns ~25 listings, so this is the cheap way to grow the")
+    typer.echo("      dataset. The new listings arrive as cards; details come on a later run.")
+    typer.echo("")
+    choice: str = typer.prompt(
+        "  Which", type=click.Choice(["1", "2"]), default="1" if deepen else "2"
+    )
+    return choice == "1"
 
 
 def _build_session_renewer(client: AruodasHttpClient, cookie_file: Path) -> Callable[[], bool]:
