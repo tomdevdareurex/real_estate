@@ -25,8 +25,7 @@ from local files into normalized English CSV datasets.
 
 ```powershell
 C:\Program Files\Python312\python.exe -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-.venv\Scripts\python.exe -m pip install -e .
+.venv\Scripts\python.exe -m pip install -e ".[dev]"
 .venv\Scripts\python.exe -m pytest
 ```
 
@@ -37,8 +36,7 @@ unsigned launcher executables.
 
 ```bash
 python3.12 -m venv .venv
-.venv/bin/python -m pip install -r requirements-dev.txt
-.venv/bin/python -m pip install -e .
+.venv/bin/python -m pip install -e ".[dev]"
 .venv/bin/python -m pytest
 ```
 
@@ -268,7 +266,7 @@ command need no interaction at all.
 It needs Playwright, which is an optional extra because nothing else uses it:
 
 ```powershell
-.venv\Scripts\python.exe -m pip install playwright
+.venv\Scripts\python.exe -m pip install -e ".[browser]"
 ```
 
 No browser download follows; it drives the Chrome already installed.
@@ -475,19 +473,33 @@ The default provider never summarizes, paraphrases, or invents text.
 ```
 
 Ruff is also configured. On systems where corporate application control blocks Ruff's bundled
-native executable, it is intentionally not part of the local development requirements or
-pre-commit hooks. Use Black, isort, mypy, and Bandit locally through `python -m ...`. Linux CI
+native executable, it is intentionally kept out of the `dev` extra and the pre-commit hooks. Use Black, isort, mypy, and Bandit locally through `python -m ...`. Linux CI
 installs and runs Ruff separately. Ruff has no supported pure-Python or Node/WASM command-line
 implementation; WSL would be another native Linux route, but it is not installed on this machine.
 
 ## Documentation
 
+**How the scraper works**
+
 - [Architecture](docs/architecture.md)
+- [Online scraping operations](docs/online_scraping.md) — transport, cookies, blocks, pacing
 - [Data dictionary](docs/data_dictionary.md)
-- [Is there a cheaper data surface?](docs/data_surface_assessment.md) — assessed, answer is no
-- [Adding a city](docs/adding_a_city.md)
 - [Field mapping](docs/field_mapping.md)
+- [Adding a city](docs/adding_a_city.md)
+
+**Decisions and evidence**
+
+- [Is there a cheaper data surface?](docs/data_surface_assessment.md) — assessed, answer is no
 - [TDD evidence](docs/testing/aruodas-offline-pipeline.tdd.md)
+- [history/](docs/history/) — completed plans, kept for the reasoning rather than the steps
+
+**Domain research** (about Lithuanian property, not about this code)
+
+- [Apartment flipping in Lithuania](docs/research/apartment_flipping_lithuania.md)
+- [Lithuanian real-estate sites](docs/research/lithuanian_real_estate_sites.md)
+
+Agent-facing notes live in [`AGENTS.md`](AGENTS.md) (dated gotchas and invariants) and
+[`CLAUDE.md`](CLAUDE.md) (how to run things on the maintainer's machine).
 
 ## License
 

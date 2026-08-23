@@ -24,15 +24,14 @@ PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m <tool> ...
 The `PYTHONIOENCODING=utf-8` prefix is the established convention here — Lithuanian text in
 output otherwise fails to encode on the Windows console.
 
-Ruff is configured in `pyproject.toml` but is deliberately absent from `requirements-dev.txt` and
+Ruff is configured in `pyproject.toml` but is deliberately absent from the `dev` extra and
 the pre-commit hooks for the same reason; only Linux CI runs it.
 
 ## Commands
 
 ```bash
 # Setup
-.venv/Scripts/python.exe -m pip install -r requirements-dev.txt
-.venv/Scripts/python.exe -m pip install -e .
+.venv/Scripts/python.exe -m pip install -e ".[dev]"
 
 # Tests
 PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m pytest -q

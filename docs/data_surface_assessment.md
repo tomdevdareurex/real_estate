@@ -65,7 +65,7 @@ Disallow: /
 ```
 
 **This scraper matches `*`.** This confirms rather than discovers: the directive is already
-recorded in [connectivity_fix_plan.md](connectivity_fix_plan.md) under *Authorization*, where the
+recorded in [connectivity_fix_plan.md](history/connectivity_fix_plan.md) under *Authorization*, where the
 project owner's written authorization from Aruodas is what resolves it. The fetch above is the
 first time the file was read directly, and the wording matches what that section describes.
 
@@ -86,5 +86,5 @@ already that it would be worse, not better.
 ## What would actually raise yield
 
 Not a different parsing surface. Only a change of source IP: the Aruodas allow-list request in
-[connectivity_fix_plan.md](connectivity_fix_plan.md), for which written authorization already
+[connectivity_fix_plan.md](history/connectivity_fix_plan.md), for which written authorization already
 exists, or running off a different network.

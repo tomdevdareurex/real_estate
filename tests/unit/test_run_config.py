@@ -183,3 +183,38 @@ def test_a_whole_city_traversal_fits_inside_the_configuration_bounds(tmp_path: P
     assert config.scrape_live is not None
     assert config.scrape_live.max_pages == 200
     assert config.scrape_live.max_listings_per_category == 10000
+
+
+MINT_HOLD = """
+schema_version: 1
+scrape_live:
+  mint_hold_selector: "#target"
+  mint_hold_seconds: 3.5
+"""
+
+
+@pytest.mark.unit
+def test_the_mint_hold_is_read_from_the_config(tmp_path: Path) -> None:
+    config = load_run_config(_write(tmp_path / "scrape.yaml", MINT_HOLD))
+
+    assert config.scrape_live is not None
+    assert config.scrape_live.mint_hold_selector == "#target"
+    assert config.scrape_live.mint_hold_seconds == 3.5
+
+
+@pytest.mark.unit
+def test_an_unset_mint_hold_leaves_the_selector_unset(tmp_path: Path) -> None:
+    """A mint that holds nothing is the normal case, so the selector may not gain a default."""
+    config = load_run_config(_write(tmp_path / "scrape.yaml", VALID))
+
+    assert config.scrape_live is not None
+    assert config.scrape_live.mint_hold_selector is None
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("seconds", ["-1.0", "61.0"])
+def test_an_out_of_range_hold_is_rejected(tmp_path: Path, seconds: str) -> None:
+    content = "schema_version: 1\nscrape_live:\n  mint_hold_seconds: " + seconds + "\n"
+
+    with pytest.raises(ConfigurationError):
+        load_run_config(_write(tmp_path / "scrape.yaml", content))

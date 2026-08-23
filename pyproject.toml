@@ -30,6 +30,25 @@ dependencies = [
 # required set leaves the package installable where no browser exists.
 browser = ["playwright==1.62.0"]
 
+# Everything the quality gate needs. This used to live in requirements-dev.txt, alongside a
+# requirements.txt that repeated `dependencies` above verbatim - two files that had to be
+# kept in step by hand with nothing checking they were. `pip install -e ".[dev]"` now
+# installs the runtime pins and the tooling from one place.
+#
+# ruff is deliberately absent: it is installed by CI only. See CLAUDE.md.
+dev = [
+  "bandit==1.8.6",
+  "black==25.1.0",
+  "build==1.2.2.post1",
+  "isort==6.0.1",
+  "mypy==1.17.1",
+  "pre-commit==4.3.0",
+  "pytest==8.4.1",
+  "pytest-cov==6.2.1",
+  "respx==0.22.0",
+  "types-PyYAML==6.0.12.20250516",
+]
+
 [project.scripts]
 aruodas = "aruodas_scraper.cli:app"
 

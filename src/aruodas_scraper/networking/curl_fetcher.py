@@ -4,7 +4,7 @@ PerimeterX scores the TLS handshake (JA3/JA4), the HTTP/2 SETTINGS frame, and he
 order. httpx cannot match Chrome on any of those, so a Chrome-shaped header set on a
 Python handshake still earns an HTTP 403 - the client claims to be a browser while
 handshaking like Python. curl_cffi replays a real Chrome fingerprint, which is what
-actually unblocks retrieval. See docs/connectivity_fix_plan.md.
+actually unblocks retrieval. See docs/history/connectivity_fix_plan.md.
 """
 
 from __future__ import annotations

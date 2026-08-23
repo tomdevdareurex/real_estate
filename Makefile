@@ -3,8 +3,7 @@ PYTHON ?= python
 .PHONY: install test coverage lint format typecheck security build check
 
 install:
-	$(PYTHON) -m pip install -r requirements-dev.txt
-	$(PYTHON) -m pip install -e .
+	$(PYTHON) -m pip install -e ".[dev]"
 
 test:
 	$(PYTHON) -m pytest

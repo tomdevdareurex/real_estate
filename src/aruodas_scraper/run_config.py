@@ -59,6 +59,15 @@ class ScrapeLiveOptions(BaseModel):
     # out. Solving clears it immediately, so this replaces a 25-minute wait with a click.
     # Needs a person at the keyboard, which is why it is off unless asked for.
     solve_on_block: bool | None = None
+    # Element to press and hold on the page a mint lands on, once the origin is already
+    # satisfied and the window is still open. Any Playwright selector: `#id`, `.class`,
+    # `text=...`, or `xpath=/html/...`. Unset means the mint does nothing but harvest.
+    # Where to write a screenshot and a frame summary each time a challenge is raised.
+    # Read-only: nothing is clicked. Unset means no capture. Keep it out of the repository.
+    challenge_evidence: Path | None = None
+    mint_hold_selector: str | None = Field(default=None, min_length=1)
+    # How long that press lasts. Only read when mint_hold_selector is set.
+    mint_hold_seconds: float | None = Field(default=None, ge=0.0, le=60.0)
     # Ask at the start whether to add details to listings already found, or to walk search
     # pages looking for new ones. The two compete for one request budget, so a run does one
     # or the other; asking makes that choice visible instead of implied by `deepen`.

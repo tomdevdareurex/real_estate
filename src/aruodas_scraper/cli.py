@@ -4,13 +4,14 @@ import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import Annotated, TypeVar
+from typing import Annotated, Any, TypeVar
 
 import click
 import typer
 import yaml
 from click.core import ParameterSource
 
+from aruodas_scraper.challenge_evidence import record_challenge
 from aruodas_scraper.cities import CityRegistry, load_city_registry
 from aruodas_scraper.constants import (
     DEFAULT_CACHE_DIRECTORY,
@@ -30,9 +31,11 @@ from aruodas_scraper.networking.budget import (
 )
 from aruodas_scraper.networking.cache import HtmlCache
 from aruodas_scraper.networking.cookie_minter import (
+    DEFAULT_HOLD_SECONDS,
     DEFAULT_MINT_TIMEOUT_SECONDS,
     DEFAULT_MINT_URL,
     mint_cookie,
+    press_and_hold,
 )
 from aruodas_scraper.networking.cookie_source import (
     PROTECTION_COOKIE_NAME,
@@ -49,6 +52,7 @@ from aruodas_scraper.networking.rate_limiter import (
     DelayPolicy,
 )
 from aruodas_scraper.networking.tls import resolve_tls_trust
+from aruodas_scraper.notify import alert_operator
 from aruodas_scraper.pipelines.all_properties import process_offline
 from aruodas_scraper.pipelines.export import read_records
 from aruodas_scraper.pipelines.online import (
@@ -130,6 +134,9 @@ _COMMAND_DEFAULTS: dict[str, dict[str, object]] = {
         "max_session_renewals": DEFAULT_MAX_SESSION_RENEWALS,
         "max_runtime_seconds": None,
         "solve_on_block": False,
+        "challenge_evidence": None,
+        "mint_hold_selector": None,
+        "mint_hold_seconds": DEFAULT_HOLD_SECONDS,
         "ask_phase": False,
         "refresh_cache": False,
         "overwrite": False,
@@ -362,6 +369,25 @@ def scrape_live_command(
             "turns a 25-minute wait into a click. Needs someone at the keyboard.",
         ),
     ] = False,
+    challenge_evidence: Annotated[
+        Path | None,
+        typer.Option(
+            help="Directory to write a screenshot and a frame summary to whenever a "
+            "challenge is raised. Read-only: nothing on the challenge is clicked.",
+        ),
+    ] = None,
+    mint_hold_selector: Annotated[
+        str | None,
+        typer.Option(
+            help="Element to press and hold on the page a mint lands on, after the origin "
+            "is satisfied. Any Playwright selector: '#id', '.class', 'text=...', "
+            "'xpath=/html/...'. Unset means the mint only harvests the cookie.",
+        ),
+    ] = None,
+    mint_hold_seconds: Annotated[
+        float,
+        typer.Option(min=0.0, max=60.0, help="How long --mint-hold-selector is held down."),
+    ] = DEFAULT_HOLD_SECONDS,
     refresh_cache: Annotated[bool, typer.Option()] = False,
     overwrite: Annotated[
         bool,
@@ -471,6 +497,21 @@ def scrape_live_command(
     solve_on_block = _resolve(
         "solve_on_block", solve_on_block, configured.solve_on_block if configured else None
     )
+    challenge_evidence = _resolve(
+        "challenge_evidence",
+        challenge_evidence,
+        configured.challenge_evidence if configured else None,
+    )
+    mint_hold_selector = _resolve(
+        "mint_hold_selector",
+        mint_hold_selector,
+        configured.mint_hold_selector if configured else None,
+    )
+    mint_hold_seconds = _resolve(
+        "mint_hold_seconds",
+        mint_hold_seconds,
+        configured.mint_hold_seconds if configured else None,
+    )
     max_runtime_seconds = _resolve(
         "max_runtime_seconds",
         max_runtime_seconds,
@@ -575,7 +616,13 @@ def scrape_live_command(
                 max_session_renewals=max_session_renewals,
                 max_runtime_seconds=max_runtime_seconds,
                 renewer=(
-                    _build_session_renewer(client, cookie_file)
+                    _build_session_renewer(
+                        client,
+                        cookie_file,
+                        hold_selector=mint_hold_selector,
+                        hold_seconds=mint_hold_seconds,
+                        evidence_directory=challenge_evidence,
+                    )
                     if solve_on_block and cookie_file is not None
                     else None
                 ),
@@ -678,21 +725,39 @@ def _choose_deepen(
     return choice == "1"
 
 
-def _build_session_renewer(client: AruodasHttpClient, cookie_file: Path) -> Callable[[], bool]:
+def _build_session_renewer(
+    client: AruodasHttpClient,
+    cookie_file: Path,
+    *,
+    hold_selector: str | None = None,
+    hold_seconds: float = DEFAULT_HOLD_SECONDS,
+    evidence_directory: Path | None = None,
+) -> Callable[[], bool]:
     """Return the callback a blocked run uses to re-earn its session instead of waiting.
 
     Waiting out a block restores the same small budget it just spent; solving a challenge
     restores a much larger one and does it now. So the browser is opened at the moment the
     origin objects, rather than leaving the operator to notice a stalled run.
+
+    `evidence_directory` records what a challenge looked like while it is up, read-only.
+    `hold_selector` runs against the page the mint lands on once the origin is satisfied.
+    A failure there is reported and swallowed: the cookie is already earned by that point,
+    and losing a renewal over a missing element would cost the run a 25-minute cooldown.
     """
 
     def renew() -> bool:
         typer.echo("")
         typer.echo("  Blocked. Opening a browser so the block can be cleared now.")
-        try:
+        try:  # When captcha solving is required, the operator has to be present anyway, so the run can wait for them.
             minted = mint_cookie(
                 profile_dir=cookie_file.parent / "browser_profile",
                 on_challenge=_announce_challenge,
+                on_challenge_page=(
+                    record_challenge(evidence_directory) if evidence_directory is not None else None
+                ),
+                on_ready=(
+                    _build_hold(hold_selector, hold_seconds) if hold_selector is not None else None
+                ),
             )
         except ConfigurationError as error:
             # A failed renewal must not end the run: the cooldown is still there to fall
@@ -709,8 +774,25 @@ def _build_session_renewer(client: AruodasHttpClient, cookie_file: Path) -> Call
     return renew
 
 
+def _build_hold(selector: str, seconds: float) -> Callable[[Any], None]:
+    """Wrap `press_and_hold` so a bad selector costs a message, not the whole renewal."""
+
+    def hold(page: Any) -> None:
+        typer.echo(f"  Holding {selector} for {seconds:.1f}s.")
+        try:
+            press_and_hold(page, selector, seconds=seconds)
+        except ConfigurationError as error:
+            typer.echo(f"  Hold skipped ({error}).", err=True)
+
+    print("  Hold complete. Continuing with the run.")
+    return hold
+
+
 def _announce_challenge() -> None:
     """Tell the operator to solve the challenge, and why it is worth doing by hand."""
+    # The window opens mid-run and can land behind whatever the operator was doing, so ring
+    # and pull it forward. A missed window costs the cooldown the renewal existed to skip.
+    alert_operator()
     typer.echo("")
     typer.echo("  A challenge appeared. Solve it in the browser window that just opened.")
     typer.echo("  This is the step that buys the request budget: a cookie minted after a")
@@ -733,6 +815,13 @@ def mint_cookie_command(
     timeout_seconds: Annotated[
         float, typer.Option(min=10.0, max=1800.0, help="How long to wait for a solve.")
     ] = DEFAULT_MINT_TIMEOUT_SECONDS,
+    challenge_evidence: Annotated[
+        Path | None,
+        typer.Option(
+            help="Directory to write a screenshot and a frame summary to if a challenge "
+            "is raised. Read-only: nothing on the challenge is clicked.",
+        ),
+    ] = None,
     config: Annotated[Path | None, _CONFIG_OPTION] = None,
     no_config: Annotated[bool, _NO_CONFIG_OPTION] = False,
 ) -> None:
@@ -760,6 +849,11 @@ def mint_cookie_command(
     # The profile holds a live session and must not land anywhere that gets committed.
     resolved_profile = profile_dir if profile_dir is not None else output.parent / "browser_profile"
 
+    evidence = _resolve(
+        "challenge_evidence",
+        challenge_evidence,
+        configured.challenge_evidence if configured else None,
+    )
     typer.echo(f"Opening:  {url}")
     typer.echo(f"Profile:  {resolved_profile}")
     try:
@@ -768,6 +862,7 @@ def mint_cookie_command(
             url=url,
             timeout_seconds=timeout_seconds,
             on_challenge=_announce_challenge,
+            on_challenge_page=(record_challenge(evidence) if evidence is not None else None),
         )
         write_cookie_file(output, minted.header)
     except ConfigurationError as error:

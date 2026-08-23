@@ -43,9 +43,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install runtime
-        run: |
-          python -m pip install -r requirements.txt
-          python -m pip install -e .
+        run: python -m pip install -e .
       # --no-config: config/scrape.yaml is the local workstation's run configuration and
       # points cookie_file at a secret kept outside the repository. Auto-discovering it here
       # would abort the run with "Cookie file was not found", so CI passes every bound

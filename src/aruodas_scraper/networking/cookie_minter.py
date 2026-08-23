@@ -27,6 +27,7 @@ Two settings are load-bearing:
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -36,10 +37,15 @@ from typing import Any
 from aruodas_scraper.exceptions import ConfigurationError
 from aruodas_scraper.networking.cookie_source import PROTECTION_COOKIE_NAME
 
+logger = logging.getLogger(__name__)
+
 # A search page rather than the site root: it is a page the scraper itself requests, so the
 # challenge raised here is the one the run would have met, and clearing it is on the path
 # that matters. It costs a single request.
 DEFAULT_MINT_URL = "https://www.aruodas.lt/butai-vilniuje/"
+
+# A press that a duration-sensitive element registers as deliberate rather than as a click.
+DEFAULT_HOLD_SECONDS = 2.0
 
 # Generous, because the budget of the whole next run rides on the human getting to the window.
 DEFAULT_MINT_TIMEOUT_SECONDS = 300.0
@@ -115,6 +121,8 @@ def mint_cookie(
     timeout_seconds: float = DEFAULT_MINT_TIMEOUT_SECONDS,
     headless: bool = False,
     on_challenge: Callable[[], None] | None = None,
+    on_challenge_page: Callable[[Any], None] | None = None,
+    on_ready: Callable[[Any], None] | None = None,
     sleeper: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
 ) -> MintedCookie:
@@ -127,6 +135,18 @@ def mint_cookie(
         timeout_seconds: How long to wait for a challenge to be cleared.
         headless: For tests only. Headless Chrome cannot clear a challenge.
         on_challenge: Called once, when a challenge is first seen, to prompt the operator.
+            It takes no page: while a challenge is up the site's own markup is not loaded,
+            so there is nothing there to drive.
+        on_challenge_page: Called once, with the Playwright page, while a challenge is up -
+            for screenshotting the interstitial, logging what was raised, or checking what
+            state the window is in. The site's own markup is not loaded at this point, and
+            the challenge itself renders in a cross-origin iframe that a top-frame locator
+            does not reach. Failures here are logged and swallowed: no cookie exists yet and
+            a person is mid-solve, so closing the window out from under them is the worst
+            outcome available.
+        on_ready: Called with the Playwright page once the origin is satisfied and the cookie
+            exists, while the window is still open. This is the only point at which the real
+            page can be scripted. Anything it raises propagates to the caller.
         sleeper: Injected so tests need not wait.
         clock: Monotonic time source, injected for the same reason.
 
@@ -160,9 +180,16 @@ def mint_cookie(
                     was_challenged = True
                     if on_challenge is not None:
                         on_challenge()
-                if not challenged:
+                    if on_challenge_page is not None:
+                        _observe_challenge(on_challenge_page, page)
+                if not challenged:  # <- the gate
                     cookies = _site_cookies(context)
                     if any(cookie["name"] == PROTECTION_COOKIE_NAME for cookie in cookies):
+                        # The session is trusted and the window has not closed yet, so this
+                        # is the one moment a caller can drive the real page. It runs before
+                        # the cookie is returned, because returning closes the context.
+                        if on_ready is not None:
+                            on_ready(page)  # <- the hook firing -   # <- your hold runs here
                         return MintedCookie(
                             header=_cookie_header(cookies),
                             solved_challenge=was_challenged,
@@ -172,6 +199,63 @@ def mint_cookie(
                 sleeper(_POLL_SECONDS)
         finally:
             context.close()
+
+
+def _observe_challenge(observer: Callable[[Any], None], page: Any) -> None:
+    """Run a challenge-time observer without letting it end the mint.
+
+    Anything raised here would leave the `finally` below closing the window while a person is
+    still working in it, losing both their solve and the budget it was about to buy. An
+    observer is diagnostic by nature, so it is never worth that.
+    """
+    try:
+        observer(page)
+    except Exception as error:
+        logger.warning("The challenge observer failed and was ignored: %s", error)
+
+
+def press_and_hold(
+    page: Any,
+    selector: str,
+    *,
+    seconds: float = DEFAULT_HOLD_SECONDS,
+    timeout_seconds: float = 10.0,
+) -> None:
+    """Hold the left mouse button down over `selector` for `seconds`, then release.
+
+    A plain `click()` is a down and an up in the same tick, so an element that measures how
+    long the button was held sees nothing. This walks the three steps by hand instead: move
+    the pointer to the middle of the element's box, press, wait, release.
+
+    Written for use as `mint_cookie(on_ready=...)`, where it runs against the real page after
+    the origin is already satisfied.
+
+    Args:
+        page: The Playwright page handed to an `on_ready` callback.
+        selector: Any Playwright selector - `#id`, `.class`, `text=...`, or `xpath=/html/...`.
+        seconds: How long to keep the button down.
+        timeout_seconds: How long to wait for the element to exist and be stable.
+
+    Raises:
+        ConfigurationError: If the element never appears, or has no box to aim at.
+    """
+    locator = page.locator(selector)
+    try:
+        locator.wait_for(state="visible", timeout=timeout_seconds * 1000)
+        box = locator.bounding_box()
+    except Exception as error:  # Playwright raises its own error types; keep this decoupled.
+        raise ConfigurationError(f"Could not find {selector!r} on the page: {error}") from error
+    if box is None:
+        raise ConfigurationError(f"{selector!r} is present but has no box to press.")
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    try:
+        # The page's own clock, not the process's: it keeps the browser's event loop turning
+        # while the button is held, which a bare `time.sleep` would not.
+        page.wait_for_timeout(seconds * 1000)
+    finally:
+        # Never leave the button stuck down - a held button breaks every later interaction.
+        page.mouse.up()
 
 
 def _timeout_message(still_challenged: bool, timeout_seconds: float) -> str:
@@ -189,8 +273,10 @@ def _timeout_message(still_challenged: bool, timeout_seconds: float) -> str:
 
 
 __all__ = [
+    "DEFAULT_HOLD_SECONDS",
     "DEFAULT_MINT_TIMEOUT_SECONDS",
     "DEFAULT_MINT_URL",
     "MintedCookie",
     "mint_cookie",
+    "press_and_hold",
 ]
