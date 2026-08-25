@@ -1,0 +1,5 @@
+﻿completed_at_utc,city,search_pages_fetched,listings_discovered,listings_new,total_known,apartments_exported,houses_exported,detail_pages_fetched,pages_served_from_cache,failed
+2026-08-22T13:58:18.886721+00:00,vilnius,0,0,0,998,498,500,0,0,263
+2026-08-22T18:46:01.629747+00:00,vilnius,0,0,0,998,498,500,14,1,52
+2026-08-22T22:44:22.041905+00:00,vilnius,0,0,0,998,498,500,52,0,0
+2026-08-23T20:54:06.650594+00:00,vilnius,0,0,0,3608,2825,783,450,14,0

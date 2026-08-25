@@ -1,0 +1,18 @@
+{
+  "apartments_exported": 2825,
+  "city": "vilnius",
+  "completed_at_utc": "2026-08-23T20:54:06.650594Z",
+  "deferred_retries_attempted": 5,
+  "deferred_retries_recovered": 5,
+  "detail_pages_fetched": 450,
+  "failed": 0,
+  "houses_exported": 783,
+  "listings_discovered": 0,
+  "listings_new": 0,
+  "mode": "online",
+  "pages_served_from_cache": 14,
+  "search_pages_fetched": 0,
+  "skipped_existing": 0,
+  "started_at_utc": "2026-08-23T19:33:27.429268Z",
+  "unknown_labels": 5
+}
