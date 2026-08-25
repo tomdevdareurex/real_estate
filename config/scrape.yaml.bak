@@ -1,11 +1,5 @@
 schema_version: 1
 
-# For a run to reload pages from the origin instead of replaying them from disk, it needs to be both refresh_cache and deepen. The former makes it hit the website, the latter makes it skip the search walk and go straight to detail pages. A run that is only refresh_cache will still fall through to the search walk, which is why a run that was only refresh_cache was still returning zero coordinates.
-# - refresh_cache: false → true — the fix. Makes it hit the website instead of replaying disk.
-# - deepen: true → false — no-op today (zero card-only rows meant it already fell through to the search walk).
-# - max_listings_per_category: 10000 → 1 — insurance, only bites if it finds something new.
-
-
 # Every value is optional. Anything omitted falls back to the command default,
 # and an explicitly passed CLI flag always overrides what is set here.
 #
@@ -26,7 +20,7 @@ scrape_live:
   # Detail pages are the expensive half: one request per listing, for the description,
   # coordinates, seller and engagement stats that no card carries. This caps only those
   # fetches - every listing seen in phase A is exported from its card regardless.
-  max_listings_per_category: 1000
+  max_listings_per_category: 1
   timeout_seconds: 30.0
 
   # Mean gap between requests; the actual delay is drawn uniformly from
