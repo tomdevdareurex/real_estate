@@ -16,6 +16,10 @@ scrape_live:
   cities_config: cities.yaml
   city: vilnius
   property_type: all
+  # Which side of the market to walk: sale, rent, or all. Kept separate from property_type
+  # because the origin's ceiling is a request count per source IP, so `all` splits one budget
+  # across four categories and deepens each dataset half as fast as a focused run.
+  deal_type: rent #sale
   output: ../data/processed
   cache: ../data/raw/cache
   # Search pages are the cheap half of the run: one request returns ~25 listings, each card
@@ -26,7 +30,7 @@ scrape_live:
   # Detail pages are the expensive half: one request per listing, for the description,
   # coordinates, seller and engagement stats that no card carries. This caps only those
   # fetches - every listing seen in phase A is exported from its card regardless.
-  max_listings_per_category: 1000
+  max_listings_per_category: 1
   timeout_seconds: 30.0
 
   # Mean gap between requests; the actual delay is drawn uniformly from
@@ -131,7 +135,7 @@ scrape_live:
   # ask at, so unattended and CI runs are unaffected.
   ask_phase: true
 
-  refresh_cache: false
+  refresh_cache: true
   # Re-fetch listings that are already in the export instead of skipping them. Left off,
   # because a run gets only about 5 requests per cooldown: re-fetching a detail page already
   # on disk costs a listing that still has nothing but a search card. Successive runs
@@ -146,7 +150,7 @@ scrape_live:
   # to consume all of it, which is why rows kept arriving without coordinates. Pass
   # --no-deepen to spend the budget discovering new listings instead. An export with no
   # card-only listings falls back to the search walk on its own, so a fresh checkout works.
-  deepen: true
+  deepen: false
 
   # Identity presented to Aruodas. LEAVE THIS UNSET on the curl transport: the
   # impersonation profile below already supplies a User-Agent that agrees with the TLS

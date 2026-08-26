@@ -61,8 +61,9 @@ _COOKIE_DOMAIN_SUFFIX = "aruodas.lt"
 _INSTALL_HINT = (
     "Minting a cookie needs Playwright, which is an optional extra: install it with\n"
     "    .venv/Scripts/python.exe -m pip install playwright\n"
-    "It drives the Chrome already installed on this machine, so no browser download is "
-    "required."
+    "    .venv/Scripts/python.exe -m playwright install chromium\n"
+    "The second step is required: this machine's policy blocks debugging of the installed "
+    "Chrome, so the mint must use Playwright's own Chromium."
 )
 
 
@@ -164,11 +165,19 @@ def mint_cookie(
     with sync_playwright() as driver:
         context = driver.chromium.launch_persistent_context(
             user_data_dir=str(profile_dir),
-            channel="chrome",
+            # Playwright's own Chromium, not `channel="chrome"`. This machine sets the
+            # `RemoteDebuggingAllowed=0` policy for Google Chrome and Edge, which kills the
+            # `--remote-debugging-pipe` Playwright drives the browser over: the window opens,
+            # the connection never arrives, and the launch times out. The policy does not name
+            # Chromium, so the bundled build is the only one that can be driven here.
             headless=headless,
             # Let the window size itself; a scripted viewport is one more thing that differs
             # from the browser this is supposed to be.
             viewport=None,
+            # Playwright's default `chromium_sandbox=False` is what makes Chrome show its
+            # "unsupported command-line flag: --no-sandbox" banner. Left alone deliberately:
+            # setting it True was tried and the mint stopped opening a window, so the banner is
+            # the cheaper of the two.
             args=["--disable-blink-features=AutomationControlled"],
         )
         try:

@@ -218,3 +218,18 @@ def test_an_out_of_range_hold_is_rejected(tmp_path: Path, seconds: str) -> None:
 
     with pytest.raises(ConfigurationError):
         load_run_config(_write(tmp_path / "scrape.yaml", content))
+
+
+@pytest.mark.unit
+def test_deal_type_is_read_from_the_configuration(tmp_path: Path) -> None:
+    path = _write(tmp_path / "scrape.yaml", "schema_version: 1\nscrape_live:\n  deal_type: rent\n")
+
+    assert load_run_config(path).scrape_live.deal_type == "rent"
+
+
+@pytest.mark.unit
+def test_an_unknown_deal_type_is_refused(tmp_path: Path) -> None:
+    path = _write(tmp_path / "scrape.yaml", "schema_version: 1\nscrape_live:\n  deal_type: lease\n")
+
+    with pytest.raises(ConfigurationError, match="deal_type"):
+        load_run_config(path)

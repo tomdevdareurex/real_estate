@@ -121,6 +121,7 @@ _COMMAND_DEFAULTS: dict[str, dict[str, object]] = {
         "cities_config": "config/cities.yaml",
         "city": "vilnius",
         "property_type": "all",
+        "deal_type": "sale",
         "output": DEFAULT_OUTPUT_DIRECTORY,
         "cache": DEFAULT_CACHE_DIRECTORY,
         "max_pages": 1,
@@ -267,6 +268,13 @@ def scrape_live_command(
     ] = Path("config/cities.yaml"),
     city: Annotated[str, typer.Option()] = "vilnius",
     property_type: Annotated[str, typer.Option(help="apartments, houses, or all")] = "all",
+    deal_type: Annotated[
+        str,
+        typer.Option(
+            help="sale, rent, or all. `all` splits one per-IP request budget across four "
+            "categories, so a focused run deepens its dataset roughly twice as fast."
+        ),
+    ] = "sale",
     output: Annotated[Path, typer.Option()] = Path(DEFAULT_OUTPUT_DIRECTORY),
     cache: Annotated[Path, typer.Option()] = Path(DEFAULT_CACHE_DIRECTORY),
     max_pages: Annotated[
@@ -458,6 +466,7 @@ def scrape_live_command(
     property_type = _resolve(
         "property_type", property_type, configured.property_type if configured else None
     )
+    deal_type = _resolve("deal_type", deal_type, configured.deal_type if configured else None)
     output = _resolve("output", output, configured.output if configured else None)
     cache = _resolve("cache", cache, configured.cache if configured else None)
     max_pages = _resolve("max_pages", max_pages, configured.max_pages if configured else None)
@@ -536,6 +545,8 @@ def scrape_live_command(
 
     if property_type not in {"apartments", "houses", "all"}:
         raise typer.BadParameter("property-type must be apartments, houses, or all")
+    if deal_type not in {"sale", "rent", "all"}:
+        raise typer.BadParameter("deal-type must be sale, rent, or all")
     if transport not in {"curl", "httpx"}:
         raise typer.BadParameter("transport must be curl or httpx")
     if jitter_seconds > min_delay_seconds:
@@ -554,7 +565,9 @@ def scrape_live_command(
         # Never block an unattended run on a question nobody is there to answer: without a
         # terminal the configured `deepen` stands, which is the behaviour CI already relies on.
         if ask_phase and not chosen_explicitly and sys.stdin.isatty():
-            deepen = _choose_deepen(deepen, output, registry, city, property_type, max_pages)
+            deepen = _choose_deepen(
+                deepen, output, registry, city, property_type, deal_type, max_pages
+            )
         if solve_on_block and cookie_file is None:
             typer.echo(
                 "  --solve-on-block needs cookie_file set: the renewed session has to be "
@@ -602,6 +615,7 @@ def scrape_live_command(
             summary = process_online(
                 city=city,
                 property_type=property_type,
+                deal_type=deal_type,
                 client=client,
                 city_registry=registry,
                 output_directory=output,
@@ -664,7 +678,7 @@ def scrape_live_command(
 
 
 def _count_card_only(
-    output: Path, registry: CityRegistry, city: str, property_type: str
+    output: Path, registry: CityRegistry, city: str, property_type: str, deal_type: str
 ) -> tuple[int, int]:
     """Return (publications known, of those still holding only a search card).
 
@@ -673,7 +687,7 @@ def _count_card_only(
     """
     total = 0
     card_only = 0
-    for category in selected_categories(property_type):
+    for category in selected_categories(property_type, deal_type):
         path = output / registry.get_category(city, category).output_filename
         if not path.is_file():
             continue
@@ -694,6 +708,7 @@ def _choose_deepen(
     registry: CityRegistry,
     city: str,
     property_type: str,
+    deal_type: str,
     max_pages: int,
 ) -> bool:
     """Ask which job this run should do, when there is a real choice and someone to ask.
@@ -704,7 +719,7 @@ def _choose_deepen(
     permanently 404) would keep discovery from ever running again. Asking removes that trap
     and makes the choice visible instead of implied by a config flag.
     """
-    total, card_only = _count_card_only(output, registry, city, property_type)
+    total, card_only = _count_card_only(output, registry, city, property_type, deal_type)
     if card_only == 0:
         # Nothing to deepen, so there is no choice to offer.
         return deepen

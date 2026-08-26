@@ -88,3 +88,40 @@ def test_house_category_keeps_only_house_identifiers() -> None:
     assert [record.listing_id for record in records] == ["2-1111111"]
     assert records[0].property_type == "house"
     assert records[0].source_page_number == 2
+
+
+@pytest.mark.unit
+def test_rent_cards_are_harvested_rather_than_dropped_as_adverts() -> None:
+    """An unrecognised ``data-uid`` is discarded silently, so an empty tuple is the failure."""
+    records = parse_search_cards(
+        Path("tests/fixtures/html/search_cards_apartments_rent.html").read_text(encoding="utf-8"),
+        category="apartments_rent",
+        source_search_url="https://www.aruodas.lt/butu-nuoma/vilniuje/",
+        page=1,
+        city="Vilnius",
+    )
+
+    assert len(records) > 0
+    assert [record.listing_id for record in records] == ["4-1495947", "4-1495948"]
+    assert records[0].property_type == "apartment"
+    assert records[0].listing_type == "rent"
+    assert records[0].price_eur == 550.0
+
+
+@pytest.mark.unit
+def test_rent_houses_keep_their_own_identifier_space() -> None:
+    records = parse_search_cards(
+        Path("tests/fixtures/html/search_cards_apartments_rent.html").read_text(encoding="utf-8"),
+        category="houses_rent",
+        source_search_url="https://www.aruodas.lt/namu-nuoma/vilniuje/",
+        page=1,
+    )
+
+    assert [record.listing_id for record in records] == ["5-73079"]
+    assert records[0].property_type == "house"
+    assert records[0].listing_type == "rent"
+
+
+@pytest.mark.unit
+def test_sale_cards_are_still_marked_as_sale() -> None:
+    assert _apartment_records()[0].listing_type == "sale"

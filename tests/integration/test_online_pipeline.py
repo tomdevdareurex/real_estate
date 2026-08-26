@@ -55,7 +55,7 @@ def test_online_pipeline_discovers_parses_and_exports_bounded_listing(
     assert summary.apartments_exported == 1
     assert summary.failed == 0
     assert {path.name for path in output_directory.iterdir()} == {
-        "apartments_vilnius.csv",
+        "apartments_sale_vilnius.csv",
         "scrape_summary.json",
         "data_quality_report.json",
         "failed_urls.csv",
@@ -65,7 +65,7 @@ def test_online_pipeline_discovers_parses_and_exports_bounded_listing(
         "run_history.csv",
     }
 
-    with (output_directory / "apartments_vilnius.csv").open(
+    with (output_directory / "apartments_sale_vilnius.csv").open(
         encoding="utf-8", newline=""
     ) as file_handle:
         rows = list(csv.DictReader(file_handle))
@@ -201,7 +201,7 @@ def test_search_cards_are_exported_for_listings_the_detail_budget_never_reaches(
     assert first_detail.call_count == 1
     assert second_detail.call_count == 0
 
-    exported = _rows(tmp_path / "processed" / "apartments_vilnius.csv")
+    exported = _rows(tmp_path / "processed" / "apartments_sale_vilnius.csv")
     rows = {row["listing_id"]: row for row in exported}
     assert set(rows) == {"1-1234567", "1-7654321"}
     # The listing that got a detail fetch keeps the richer record; the other still lands in
@@ -233,9 +233,9 @@ def test_a_detail_record_inherits_card_fields_its_own_page_never_stated(tmp_path
 
     _run(tmp_path, "cache-one", max_listings_per_category=1)
 
-    row = {r["listing_id"]: r for r in _rows(tmp_path / "processed" / "apartments_vilnius.csv")}[
-        "1-1234567"
-    ]
+    row = {
+        r["listing_id"]: r for r in _rows(tmp_path / "processed" / "apartments_sale_vilnius.csv")
+    }["1-1234567"]
     assert row["record_source"] == "detail"
     assert row["district"] == "Žirmūnai"
     # Backfilling must not let a stale card overwrite what the detail page did state.
@@ -258,7 +258,7 @@ def test_a_later_run_deepens_a_listing_that_only_has_a_search_record(tmp_path: P
         return_value=httpx.Response(200, content=detail_html.replace(b"1-1234567", b"1-7654321"))
     )
 
-    export = tmp_path / "processed" / "apartments_vilnius.csv"
+    export = tmp_path / "processed" / "apartments_sale_vilnius.csv"
 
     _run(tmp_path, "cache-one", max_listings_per_category=1)
     first_pass = {row["listing_id"]: row for row in _rows(export)}
@@ -304,7 +304,7 @@ def test_deepening_spends_the_whole_budget_on_details_and_never_rewalks_search(
     # The point of the whole exercise: the card-only row gains the coordinates only a detail
     # page carries.
     deepened = {
-        r["listing_id"]: r for r in _rows(tmp_path / "processed" / "apartments_vilnius.csv")
+        r["listing_id"]: r for r in _rows(tmp_path / "processed" / "apartments_sale_vilnius.csv")
     }
     assert deepened["1-7654321"]["record_source"] == "detail"
     assert deepened["1-7654321"]["latitude"] == "54.712345"
@@ -362,7 +362,7 @@ def test_a_re_seen_card_backfills_a_detail_row_it_arrives_after(tmp_path: Path) 
     respx.get(SECOND_DETAIL_URL).mock(
         return_value=httpx.Response(200, content=detail_html.replace(b"1-1234567", b"1-7654321"))
     )
-    export = tmp_path / "processed" / "apartments_vilnius.csv"
+    export = tmp_path / "processed" / "apartments_sale_vilnius.csv"
 
     _run(tmp_path, "cache-one", max_listings_per_category=1)
     assert {r["listing_id"]: r for r in _rows(export)}["1-1234567"]["district"] == ""
@@ -396,7 +396,8 @@ def test_phase_a_records_survive_a_run_that_dies_during_detail_retrieval(tmp_pat
 
     # The run never reached its own final export, yet phase A's cards are already on disk.
     rows = {
-        row["listing_id"]: row for row in _rows(tmp_path / "processed" / "apartments_vilnius.csv")
+        row["listing_id"]: row
+        for row in _rows(tmp_path / "processed" / "apartments_sale_vilnius.csv")
     }
     assert set(rows) == {"1-1234567", "1-7654321"}
     assert rows["1-7654321"]["price_eur"] == "75000.0"
@@ -433,7 +434,8 @@ def test_detail_rows_survive_a_run_that_dies_during_the_cooldown(tmp_path: Path)
 
     sleeper.assert_called_once_with(120.0)
     rows = {
-        row["listing_id"]: row for row in _rows(tmp_path / "processed" / "apartments_vilnius.csv")
+        row["listing_id"]: row
+        for row in _rows(tmp_path / "processed" / "apartments_sale_vilnius.csv")
     }
     assert rows["1-1234567"]["record_source"] == "detail"
     assert rows["1-1234567"]["latitude"] == "54.712345"
@@ -460,7 +462,7 @@ def test_online_pipeline_skips_listings_already_present_in_the_export(tmp_path: 
     assert second_detail.call_count == 1
     assert summary.skipped_existing == 1  # type: ignore[attr-defined]
     assert summary.detail_pages_fetched == 1  # type: ignore[attr-defined]
-    assert _listing_ids(tmp_path / "processed" / "apartments_vilnius.csv") == [
+    assert _listing_ids(tmp_path / "processed" / "apartments_sale_vilnius.csv") == [
         "1-1234567",
         "1-7654321",
     ]
@@ -484,7 +486,7 @@ def test_online_pipeline_refetches_known_listings_when_overwrite_is_requested(
 
     assert first_detail.call_count == 2
     assert summary.skipped_existing == 0  # type: ignore[attr-defined]
-    assert _listing_ids(tmp_path / "processed" / "apartments_vilnius.csv") == ["1-1234567"]
+    assert _listing_ids(tmp_path / "processed" / "apartments_sale_vilnius.csv") == ["1-1234567"]
 
 
 @pytest.mark.integration
@@ -558,7 +560,7 @@ def test_online_pipeline_preserves_unseen_rows_when_overwriting(tmp_path: Path) 
     _run(tmp_path, "cache-one", max_listings_per_category=2)
     _run(tmp_path, "cache-two", max_listings_per_category=1, overwrite=True)
 
-    assert _listing_ids(tmp_path / "processed" / "apartments_vilnius.csv") == [
+    assert _listing_ids(tmp_path / "processed" / "apartments_sale_vilnius.csv") == [
         "1-1234567",
         "1-7654321",
     ]
@@ -588,7 +590,7 @@ def test_online_pipeline_keeps_one_category_when_another_first_page_is_blocked(
     assert houses_search.call_count == 2
     assert summary.apartments_exported == 1  # type: ignore[attr-defined]
     assert summary.failed == 1  # type: ignore[attr-defined]
-    assert _listing_ids(tmp_path / "processed" / "apartments_vilnius.csv") == ["1-1234567"]
+    assert _listing_ids(tmp_path / "processed" / "apartments_sale_vilnius.csv") == ["1-1234567"]
     failures = (tmp_path / "processed" / "failed_urls.csv").read_text("utf-8")
     assert "retrieve_search" in failures
     assert HOUSES_SEARCH_URL in failures
@@ -675,7 +677,7 @@ def test_online_pipeline_recovers_a_blocked_listing_after_the_cooldown(tmp_path:
     assert summary.deferred_retries_recovered == 1  # type: ignore[attr-defined]
     assert summary.failed == 0  # type: ignore[attr-defined]
     assert summary.apartments_exported == 1  # type: ignore[attr-defined]
-    assert _listing_ids(tmp_path / "processed" / "apartments_vilnius.csv") == ["1-1234567"]
+    assert _listing_ids(tmp_path / "processed" / "apartments_sale_vilnius.csv") == ["1-1234567"]
     assert DETAIL_URL not in (tmp_path / "processed" / "failed_urls.csv").read_text("utf-8")
     sleeper.assert_called_once_with(120.0)
 
@@ -759,7 +761,7 @@ def test_online_pipeline_retries_listings_it_never_reached_before_abandoning(
     assert summary.deferred_retries_attempted == 1  # type: ignore[attr-defined]
     assert summary.deferred_retries_recovered == 1  # type: ignore[attr-defined]
     assert summary.failed == 0  # type: ignore[attr-defined]
-    assert sorted(_listing_ids(tmp_path / "processed" / "apartments_vilnius.csv")) == [
+    assert sorted(_listing_ids(tmp_path / "processed" / "apartments_sale_vilnius.csv")) == [
         "1-1234567",
         "1-7654321",
     ]
@@ -839,7 +841,7 @@ def test_the_search_walk_multiplies_records_far_beyond_one_record_per_request(
     assert detail.call_count == 1
     assert summary.failed == 0  # type: ignore[attr-defined]
 
-    rows = _rows(tmp_path / "processed" / "apartments_vilnius.csv")
+    rows = _rows(tmp_path / "processed" / "apartments_sale_vilnius.csv")
     assert len(rows) == CARDS_PER_PAGE * PAGES_WALKED
     assert sum(row["record_source"] == "search" for row in rows) == 249
     assert sum(row["record_source"] == "detail" for row in rows) == 1
@@ -853,7 +855,7 @@ def test_online_pipeline_refuses_to_run_against_an_unreadable_export(tmp_path: P
             200, content=Path("tests/fixtures/html/search_apartments.html").read_bytes()
         )
     )
-    export = tmp_path / "processed" / "apartments_vilnius.csv"
+    export = tmp_path / "processed" / "apartments_sale_vilnius.csv"
     export.parent.mkdir(parents=True)
     export.write_text("listing_id\n1-1234567\n", encoding="utf-8")
 
@@ -932,3 +934,53 @@ def test_replaying_cached_pages_costs_no_request_and_is_not_counted_as_one(
     assert second.pages_served_from_cache >= 1  # type: ignore[attr-defined]
     # The cards are still parsed out of the cached page, so the walk really did continue.
     assert second.listings_discovered == first.listings_discovered  # type: ignore[attr-defined]
+
+
+@pytest.mark.integration
+@respx.mock
+def test_a_rent_run_exports_rent_rows_to_the_rent_file(tmp_path: Path) -> None:
+    """Every mistake in the rent path exports an empty file and exits clean, so assert on rows."""
+    rent_search_url = "https://www.aruodas.lt/butu-nuoma/vilniuje/"
+    rent_detail_url = (
+        "https://www.aruodas.lt/"
+        "butu-nuoma-vilniuje-zirmunuose-verkiu-g-isnuomojamas-jaukus-kambariu-butas-su-4-1495947/"
+    )
+    search_html = Path("tests/fixtures/html/search_cards_apartments_rent.html").read_bytes()
+    detail_html = (
+        Path("tests/fixtures/html/apartment_detail.html")
+        .read_text(encoding="utf-8")
+        .replace(
+            "butai-vilniuje-zirmunuose-testu-g-butas-1-1234567",
+            "butu-nuoma-vilniuje-zirmunuose-verkiu-g-isnuomojamas-jaukus-kambariu-butas-su-4-1495947",
+        )
+        .encode("utf-8")
+    )
+    respx.get(rent_search_url).mock(return_value=httpx.Response(200, content=search_html))
+    respx.get(rent_detail_url).mock(return_value=httpx.Response(200, content=detail_html))
+    output_directory = tmp_path / "processed"
+
+    with AruodasHttpClient(
+        cache=HtmlCache(tmp_path / "cache"),
+        delay_policy=DelayPolicy(0, 0, 0),
+        options=FetchOptions(max_attempts=1, blocked_max_attempts=1),
+        sleeper=Mock(),
+    ) as client:
+        summary = process_online(
+            city="vilnius",
+            property_type="apartments",
+            client=client,
+            city_registry=load_city_registry(Path("config/cities.yaml")),
+            output_directory=output_directory,
+            max_pages=1,
+            max_listings_per_category=1,
+            deal_type="rent",
+        )
+
+    assert summary.failed == 0
+    assert not (output_directory / "apartments_sale_vilnius.csv").exists()
+
+    rows = _rows(output_directory / "apartments_rent_vilnius.csv")
+    assert [row["listing_id"] for row in rows] == ["4-1495947", "4-1495948"]
+    assert {row["listing_type"] for row in rows} == {"rent"}
+    assert {row["property_type"] for row in rows} == {"apartment"}
+    assert rows[0]["record_source"] == "detail"

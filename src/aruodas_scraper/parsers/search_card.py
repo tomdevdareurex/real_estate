@@ -26,6 +26,8 @@ _CARD_SELECTOR = "div.list-row-v2[data-uid]"
 _UID_PATTERNS: dict[PropertyCategory, re.Pattern[str]] = {
     "apartments": re.compile(r"^1-\d+$"),
     "houses": re.compile(r"^2-\d+$"),
+    "apartments_rent": re.compile(r"^4-\d+$"),
+    "houses_rent": re.compile(r"^5-\d+$"),
 }
 _FLOOR_OF_TOTAL = re.compile(r"^\s*(\d+)\s*/\s*(\d+)")
 _BASE_URL = "https://www.aruodas.lt/"
@@ -122,6 +124,7 @@ def _card_record(
         "listing_url": canonical_url,
         "canonical_url": canonical_url,
         "property_type": property_type,
+        "listing_type": "rent" if category.endswith("_rent") else "sale",
         "record_source": "search",
         "city": city,
         "district": district,
@@ -165,7 +168,7 @@ def parse_search_cards(
     """
     tree = HTMLParser(html)
     mappings = load_field_mappings(mapping_path)
-    property_type = "apartment" if category == "apartments" else "house"
+    property_type = "apartment" if category.startswith("apartments") else "house"
     now = datetime.now(UTC)
     records = (
         _card_record(card, category, property_type, source_search_url, page, city, mappings, now)

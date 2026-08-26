@@ -10,10 +10,17 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from aruodas_scraper.constants import MAX_CONFIG_BYTES
 from aruodas_scraper.exceptions import ConfigurationError
 
-PropertyCategory = Literal["apartments", "houses"]
+PropertyCategory = Literal["apartments", "houses", "apartments_rent", "houses_rent"]
 
 _ALLOWED_HOSTS = frozenset({"aruodas.lt", "www.aruodas.lt"})
-_EXPECTED_PREFIXES = {"apartments": "1-", "houses": "2-"}
+# Aruodas gives each side of the market its own listing-id space, so a rent listing can never
+# collide with a sale one even though both are exported per city.
+_EXPECTED_PREFIXES = {
+    "apartments": "1-",
+    "houses": "2-",
+    "apartments_rent": "4-",
+    "houses_rent": "5-",
+}
 
 
 class CategoryDefinition(BaseModel):

@@ -29,7 +29,7 @@ def _record(listing_id: str, source: str) -> ListingRecord:
 
 
 def _export(output: Path, *records: ListingRecord) -> None:
-    write_records(output / "apartments_vilnius.csv", list(records))
+    write_records(output / "apartments_sale_vilnius.csv", list(records))
 
 
 @pytest.mark.unit
@@ -42,7 +42,7 @@ def test_the_counts_offered_come_from_the_export(tmp_path: Path) -> None:
         _record("1-3", "detail"),
     )
 
-    total, card_only = cli._count_card_only(tmp_path, _REGISTRY, "vilnius", "apartments")
+    total, card_only = cli._count_card_only(tmp_path, _REGISTRY, "vilnius", "apartments", "sale")
 
     assert (total, card_only) == (3, 2)
 
@@ -57,13 +57,15 @@ def test_nothing_is_asked_when_there_is_no_backlog_to_deepen(
         cli.typer, "prompt", lambda *_args, **_kwargs: pytest.fail("should not have asked")
     )
 
-    assert cli._choose_deepen(True, tmp_path, _REGISTRY, "vilnius", "apartments", 200) is True
+    assert (
+        cli._choose_deepen(True, tmp_path, _REGISTRY, "vilnius", "apartments", "sale", 200) is True
+    )
 
 
 @pytest.mark.unit
 def test_a_missing_export_is_not_an_error_worth_prompting_about(tmp_path: Path) -> None:
     """A first run has nothing to deepen, so it should go straight to discovery."""
-    total, card_only = cli._count_card_only(tmp_path, _REGISTRY, "vilnius", "apartments")
+    total, card_only = cli._count_card_only(tmp_path, _REGISTRY, "vilnius", "apartments", "sale")
 
     assert (total, card_only) == (0, 0)
 
@@ -76,7 +78,7 @@ def test_the_answer_decides_which_phase_runs(
     _export(tmp_path, _record("1-1", "search"), _record("1-3", "detail"))
     monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **_kwargs: answer)
 
-    chosen = cli._choose_deepen(True, tmp_path, _REGISTRY, "vilnius", "apartments", 200)
+    chosen = cli._choose_deepen(True, tmp_path, _REGISTRY, "vilnius", "apartments", "sale", 200)
 
     assert chosen is expected
 
@@ -84,8 +86,8 @@ def test_the_answer_decides_which_phase_runs(
 @pytest.mark.unit
 def test_an_unreadable_export_does_not_break_the_prompt(tmp_path: Path) -> None:
     """The run reports a bad export properly moments later; a prompt is the wrong place to."""
-    (tmp_path / "apartments_vilnius.csv").write_text("not,a,valid\nexport\n", encoding="utf-8")
+    (tmp_path / "apartments_sale_vilnius.csv").write_text("not,a,valid\nexport\n", encoding="utf-8")
 
-    total, card_only = cli._count_card_only(tmp_path, _REGISTRY, "vilnius", "apartments")
+    total, card_only = cli._count_card_only(tmp_path, _REGISTRY, "vilnius", "apartments", "sale")
 
     assert (total, card_only) == (0, 0)

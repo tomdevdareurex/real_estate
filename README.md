@@ -65,7 +65,7 @@ outputs, checkpoints, and logs are ignored by `.gitignore`.
 | Command | Data source | Key options | What it does |
 |---|---|---|---|
 | `parse-offline` | Local HTML files (no network) | `--input`, `--property-type {apartments,houses,all}`, `--city`, `--output`, `--checkpoint`, `--resume`, `--refresh`, `--translate`, `--config`, `--no-config` | Parses already-downloaded listing-detail pages from a directory. `--property-type all` auto-classifies each file by its canonical URL (apartment vs house). `--input` is required unless the run configuration supplies it. |
-| `scrape-live` | Live aruodas.lt (rate-limited, cached) | `--cities-config`, `--city`, `--property-type {apartments,houses,all}`, `--output`, `--cache`, `--max-pages` (1-500), `--max-listings-per-category` (1-20000), `--timeout-seconds` (1-120), `--solve-on-block`, `--refresh-cache`, `--overwrite`, `--deepen`/`--no-deepen`, `--config`, `--no-config` | Follows configured search pages and retrieves bounded listing-detail pages, producing the same normalized CSV/JSON as offline parsing. Deepens listings already held as search cards by default; `--no-deepen` walks the search pages to discover new ones. |
+| `scrape-live` | Live aruodas.lt (rate-limited, cached) | `--cities-config`, `--city`, `--property-type {apartments,houses,all}`, `--deal-type {sale,rent,all}`, `--output`, `--cache`, `--max-pages` (1-500), `--max-listings-per-category` (1-20000), `--timeout-seconds` (1-120), `--solve-on-block`, `--refresh-cache`, `--overwrite`, `--deepen`/`--no-deepen`, `--config`, `--no-config` | Follows configured search pages and retrieves bounded listing-detail pages, producing the same normalized CSV/JSON as offline parsing. Deepens listings already held as search cards by default; `--no-deepen` walks the search pages to discover new ones. `--deal-type` picks which side of the market to walk; `all` splits one per-IP request budget across four categories, so a focused run deepens its dataset roughly twice as fast. |
 | `mint-cookie` | A real Chrome window | `--output`, `--url`, `--profile-dir`, `--timeout-seconds` (10-1800), `--config`, `--no-config` | Opens Chrome, waits for you to solve any bot-protection challenge, then writes the session cookie to `cookie_file`. A solved challenge is what raises the request budget, so this is the fix for a run that dies after ~6 requests. Needs the optional `playwright` extra. |
 | `validate <csv_path>` | An exported CSV | — | Checks a CSV for duplicate listing IDs and reports total valid records. |
 | `report-unknown-fields` | `data/processed/unknown_fields.csv` | `--report` | Prints any Lithuanian attribute labels seen that aren't yet mapped in `field_mappings_lt_en.yaml`. |
@@ -213,8 +213,8 @@ Resume or intentionally reprocess:
 Validate exports and inspect diagnostics:
 
 ```powershell
-.venv\Scripts\python.exe -m aruodas_scraper validate data/processed/apartments_vilnius.csv
-.venv\Scripts\python.exe -m aruodas_scraper validate data/processed/houses_vilnius.csv
+.venv\Scripts\python.exe -m aruodas_scraper validate data/processed/apartments_sale_vilnius.csv
+.venv\Scripts\python.exe -m aruodas_scraper validate data/processed/houses_sale_vilnius.csv
 .venv\Scripts\python.exe -m aruodas_scraper report-unknown-fields
 .venv\Scripts\python.exe -m aruodas_scraper show-config
 ```
@@ -395,6 +395,20 @@ The offline pipeline generates:
 ```text
 data/processed/apartments_vilnius.csv
 data/processed/houses_vilnius.csv
+data/processed/scrape_summary.json
+data/processed/data_quality_report.json
+data/processed/failed_urls.csv
+data/processed/unknown_fields.csv
+```
+
+Live runs name each export after the category it walked, so the two sides of the market
+accumulate separately (`config/cities.yaml` owns these filenames):
+
+```text
+data/processed/apartments_sale_vilnius.csv
+data/processed/houses_sale_vilnius.csv
+data/processed/apartments_rent_vilnius.csv    # --deal-type rent
+data/processed/houses_rent_vilnius.csv        # --deal-type rent
 data/processed/scrape_summary.json
 data/processed/data_quality_report.json
 data/processed/failed_urls.csv

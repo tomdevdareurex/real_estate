@@ -13,10 +13,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-
-import sys
-from playwright.sync_api import sync_playwright
-
 HOLD_SECONDS = 10.0
 DEFAULT_SETTLE_SECONDS = 2.0
 _SETTLE_POLL_SECONDS = 0.2

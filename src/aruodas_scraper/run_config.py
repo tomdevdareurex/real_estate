@@ -16,6 +16,7 @@ from aruodas_scraper.constants import (
 from aruodas_scraper.exceptions import ConfigurationError
 
 PropertyTypeOption = Literal["apartments", "houses", "all"]
+DealTypeOption = Literal["sale", "rent", "all"]
 TransportOption = Literal["curl", "httpx"]
 _CITY_PATTERN = r"^[a-z][a-z0-9_-]*$"
 
@@ -29,6 +30,7 @@ class ScrapeLiveOptions(BaseModel):
     cities_config: Path | None = None
     city: str | None = Field(default=None, pattern=_CITY_PATTERN)
     property_type: PropertyTypeOption | None = None
+    deal_type: DealTypeOption | None = None
     output: Path | None = None
     cache: Path | None = None
     max_pages: int | None = Field(default=None, ge=1, le=MAX_SEARCH_PAGES)
@@ -193,6 +195,7 @@ def load_run_config(path: Path) -> RunConfig:
 
 
 __all__ = [
+    "DealTypeOption",
     "ParseOfflineOptions",
     "PropertyTypeOption",
     "RunConfig",

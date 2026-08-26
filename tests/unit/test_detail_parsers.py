@@ -268,3 +268,30 @@ def test_parser_redacts_contact_details_from_description() -> None:
     assert "+370 612 34567" not in (record.description_lt or "")
     assert "[REDACTED_EMAIL]" in (record.description_lt or "")
     assert "[REDACTED_PHONE]" in (record.description_lt or "")
+
+
+@pytest.mark.unit
+def test_a_rent_detail_page_is_recorded_as_rent_under_its_own_identifier() -> None:
+    """Rent pages reuse the sale markup, so only the identifier and the caller mark them apart."""
+    html = (FIXTURES / "apartment_detail.html").read_text(encoding="utf-8")
+    rent_html = html.replace(
+        "butai-vilniuje-zirmunuose-testu-g-butas-1-1234567",
+        "butu-nuoma-vilniuje-zirmunuose-verkiu-g-butas-4-1495947",
+    )
+
+    record, _ = parse_apartment(
+        rent_html, source_search_url="saved://apartments_rent", page=1, listing_type="rent"
+    )
+
+    assert record.listing_id == "4-1495947"
+    assert record.property_type == "apartment"
+    assert record.listing_type == "rent"
+
+
+@pytest.mark.unit
+def test_a_detail_page_is_recorded_as_sale_unless_told_otherwise() -> None:
+    html = (FIXTURES / "house_detail.html").read_text(encoding="utf-8")
+
+    record, _ = parse_house(html, source_search_url="saved://houses", page=1)
+
+    assert record.listing_type == "sale"

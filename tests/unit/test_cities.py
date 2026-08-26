@@ -21,7 +21,22 @@ def test_load_city_registry_accepts_repository_configuration() -> None:
 
     assert apartments.search_url == "https://www.aruodas.lt/butai/vilniuje/"
     assert apartments.listing_id_prefix == "1-"
-    assert apartments.output_filename == "apartments_vilnius.csv"
+    assert apartments.output_filename == "apartments_sale_vilnius.csv"
+
+
+@pytest.mark.unit
+def test_load_city_registry_accepts_the_rent_categories() -> None:
+    registry = load_city_registry(Path("config/cities.yaml"))
+
+    apartments = registry.get_category("vilnius", "apartments_rent")
+    houses = registry.get_category("vilnius", "houses_rent")
+
+    assert apartments.search_url == "https://www.aruodas.lt/butu-nuoma/vilniuje/"
+    assert apartments.listing_id_prefix == "4-"
+    assert apartments.output_filename == "apartments_rent_vilnius.csv"
+    assert houses.search_url == "https://www.aruodas.lt/namu-nuoma/vilniuje/"
+    assert houses.listing_id_prefix == "5-"
+    assert houses.output_filename == "houses_rent_vilnius.csv"
 
 
 @pytest.mark.unit
@@ -161,4 +176,26 @@ def test_load_city_registry_rejects_invalid_registry_shape(tmp_path: Path, conte
     path = _write_registry(tmp_path, content)
 
     with pytest.raises(ConfigurationError):
+        load_city_registry(path)
+
+
+@pytest.mark.unit
+def test_load_city_registry_rejects_a_rent_category_with_a_sale_prefix(tmp_path: Path) -> None:
+    """Rent lives in its own identifier space; borrowing the sale prefix would merge two markets."""
+    path = _write_registry(
+        tmp_path,
+        """
+        cities:
+          vilnius:
+            display_name: Vilnius
+            country: Lithuania
+            categories:
+              apartments_rent:
+                search_url: https://www.aruodas.lt/butu-nuoma/vilniuje/
+                listing_id_prefix: "1-"
+                output_filename: apartments_rent_vilnius.csv
+        """,
+    )
+
+    with pytest.raises(ConfigurationError, match="listing_id_prefix"):
         load_city_registry(path)

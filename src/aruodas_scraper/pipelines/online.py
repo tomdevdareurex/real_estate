@@ -116,12 +116,25 @@ class _ListingOutcome:
     fetched: bool = False
 
 
-def selected_categories(property_type: str) -> tuple[PropertyCategory, ...]:
-    if property_type == "all":
-        return ("apartments", "houses")
-    if property_type in {"apartments", "houses"}:
-        return (property_type,)  # type: ignore[return-value]
-    raise ValueError("property_type must be apartments, houses, or all")
+_CATEGORIES: dict[tuple[str, str], PropertyCategory] = {
+    ("apartments", "sale"): "apartments",
+    ("houses", "sale"): "houses",
+    ("apartments", "rent"): "apartments_rent",
+    ("houses", "rent"): "houses_rent",
+}
+
+
+def selected_categories(
+    property_type: str, deal_type: str = "sale"
+) -> tuple[PropertyCategory, ...]:
+    """Resolve the property and deal axes into the concrete categories to walk."""
+    if property_type not in {"apartments", "houses", "all"}:
+        raise ValueError("property_type must be apartments, houses, or all")
+    if deal_type not in {"sale", "rent", "all"}:
+        raise ValueError("deal_type must be sale, rent, or all")
+    properties = ("apartments", "houses") if property_type == "all" else (property_type,)
+    deals = ("sale", "rent") if deal_type == "all" else (deal_type,)
+    return tuple(_CATEGORIES[(prop, deal)] for deal in deals for prop in properties)
 
 
 def _queue_from_existing_cards(
@@ -184,9 +197,10 @@ def _parse_detail(
     source_search_url: str,
     source_page_number: int,
 ) -> tuple[ListingRecord, tuple[UnknownField, ...]]:
-    if category == "apartments":
-        return parse_apartment(html, source_search_url, source_page_number)
-    return parse_house(html, source_search_url, source_page_number)
+    listing_type = "rent" if category.endswith("_rent") else "sale"
+    if category.startswith("apartments"):
+        return parse_apartment(html, source_search_url, source_page_number, None, listing_type)
+    return parse_house(html, source_search_url, source_page_number, None, listing_type)
 
 
 def _parse_search_page(
@@ -256,7 +270,7 @@ def _attempt_listing(
             listing.source_search_url,
             listing.source_page_number,
         )
-        expected_property_type = "apartment" if category == "apartments" else "house"
+        expected_property_type = "apartment" if category.startswith("apartments") else "house"
         if (
             record.listing_id != listing.listing_id
             or not record.listing_id.startswith(definition.listing_id_prefix)
@@ -300,6 +314,7 @@ def process_online(
     sleeper: Callable[[float], None] = time.sleep,
     shuffler: Callable[[list[DiscoveryRecord]], None] = secrets.SystemRandom().shuffle,
     renewer: Callable[[], bool] | None = None,
+    deal_type: str = "sale",
 ) -> OnlineScrapeSummary:
     """Retrieve, parse, and export a bounded live snapshot.
 
@@ -366,8 +381,7 @@ def process_online(
     )
 
     started = datetime.now(UTC)
-    apartments: list[ListingRecord] = []
-    houses: list[ListingRecord] = []
+    collected: dict[PropertyCategory, list[ListingRecord]] = {}
     unknown_fields: list[UnknownField] = []
     failures: list[FailedUrl] = []
     search_pages_fetched = 0
@@ -380,9 +394,10 @@ def process_online(
     deferred_retries_attempted = 0
     deferred_retries_recovered = 0
 
-    categories = selected_categories(property_type)
+    categories = selected_categories(property_type, deal_type)
     existing_records: dict[PropertyCategory, list[ListingRecord]] = {}
     for category in categories:
+        collected[category] = []
         definition = city_registry.get_category(city, category)
         try:
             existing_records[category] = _load_existing_records(
@@ -411,10 +426,9 @@ def process_online(
         output_directory.mkdir(parents=True, exist_ok=True)
         for flushed in categories:
             flushed_definition = city_registry.get_category(city, flushed)
-            collected = apartments if flushed == "apartments" else houses
             write_records(
                 output_directory / flushed_definition.output_filename,
-                _merge_records(existing_records.get(flushed, []), collected),
+                _merge_records(existing_records.get(flushed, []), collected.get(flushed, [])),
             )
         write_failures(output_directory / "failed_urls.csv", failures)
 
@@ -530,10 +544,7 @@ def process_online(
             card_records = _parse_search_page(
                 search_html, category, definition, page_number, city, current_url, failures
             )
-            if category == "apartments":
-                apartments.extend(card_records)
-            else:
-                houses.extend(card_records)
+            collected[category].extend(card_records)
             logger.info(
                 "[%s] search page %d yielded %d card record(s) from one request.",
                 category,
@@ -623,10 +634,7 @@ def process_online(
         failure = outcome.failure
         if failure is None:
             if outcome.record is not None:
-                if item.category == "apartments":
-                    apartments.append(outcome.record)
-                else:
-                    houses.append(outcome.record)
+                collected[item.category].append(outcome.record)
             unknown_fields.extend(outcome.unknown)
             if attempts:
                 deferred_retries_recovered += 1
@@ -657,15 +665,16 @@ def process_online(
             )
         )
 
-    final_apartments = _merge_records(existing_records.get("apartments", []), apartments)
-    final_houses = _merge_records(existing_records.get("houses", []), houses)
+    final: dict[PropertyCategory, list[ListingRecord]] = {
+        category: _merge_records(existing_records.get(category, []), collected.get(category, []))
+        for category in categories
+    }
     output_directory.mkdir(parents=True, exist_ok=True)
     for category in categories:
         definition = city_registry.get_category(city, category)
-        records = final_apartments if category == "apartments" else final_houses
-        write_records(output_directory / definition.output_filename, records)
+        write_records(output_directory / definition.output_filename, final[category])
 
-    all_records = [*final_apartments, *final_houses]
+    all_records = [record for category in categories for record in final[category]]
     listings_new = sum(1 for record in all_records if record.listing_id not in known_listing_ids)
     summary = OnlineScrapeSummary(
         city=city,
@@ -676,8 +685,12 @@ def process_online(
         listings_discovered=listings_discovered,
         listings_new=listings_new,
         detail_pages_fetched=detail_pages_fetched,
-        apartments_exported=len(final_apartments),
-        houses_exported=len(final_houses),
+        apartments_exported=sum(
+            len(records) for category, records in final.items() if category.startswith("apartments")
+        ),
+        houses_exported=sum(
+            len(records) for category, records in final.items() if category.startswith("houses")
+        ),
         failed=len(failures),
         unknown_labels=len({item.label_lt for item in unknown_fields}),
         skipped_existing=skipped_existing,

@@ -22,7 +22,8 @@ from aruodas_scraper.parsers.coordinates import extract_coordinates
 from aruodas_scraper.parsers.engagement import extract_engagement
 from aruodas_scraper.parsers.structured_data import extract_json_ld
 
-_LISTING_ID = re.compile(r"([12]-\d+)(?:/)?$")
+# 1/2 are sale apartments/houses, 4/5 their rental counterparts.
+_LISTING_ID = re.compile(r"([1245]-\d+)(?:/)?$")
 _DATE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 
 
@@ -155,6 +156,7 @@ def parse_listing(
     source_search_url: str,
     page: int,
     mapping_path: Path | None = None,
+    listing_type: str = "sale",
 ) -> tuple[ListingRecord, tuple[UnknownField, ...]]:
     """Parse one apartment or house from the primary listing container."""
     tree = HTMLParser(html)
@@ -230,6 +232,7 @@ def parse_listing(
         "listing_url": canonical_url,
         "canonical_url": canonical_url,
         "property_type": property_type,
+        "listing_type": listing_type,
         "municipality": address.city,
         "city": address.city,
         "neighbourhood": address.neighbourhood,

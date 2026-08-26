@@ -7,9 +7,16 @@ from selectolax.parser import HTMLParser
 
 from aruodas_scraper.models import DiscoveryRecord, DiscoveryResult
 
+# Detail URLs join the category segment to the slug with a hyphen (`/butu-nuoma-vilniuje-...`),
+# while the search and pagination URLs below use a slash (`/butu-nuoma/vilniuje/`), so a
+# pagination link can never satisfy a listing pattern. The rent patterns need no counterpart to
+# the `patalpa-` alternation: that exists because sale apartments share a result surface with
+# commercial premises, which the rental sections do not.
 _PATTERNS = {
     "apartments": re.compile(r"/(?:butai|patalpa-[^/]+)-[^?#]*-(1-\d+)/?$"),
     "houses": re.compile(r"/namai-[^?#]*-(2-\d+)/?$"),
+    "apartments_rent": re.compile(r"/butu-nuoma-[^?#]*-(4-\d+)/?$"),
+    "houses_rent": re.compile(r"/namu-nuoma-[^?#]*-(5-\d+)/?$"),
 }
 # Aruodas puts the search filters between the category and the page number, so the real link is
 # `/butai/vilniuje/puslapis/2/` rather than `/butai/puslapis/2/`. Matching only the unfiltered
@@ -19,6 +26,8 @@ _PATTERNS = {
 _PAGINATION = {
     "apartments": re.compile(r"/butai/(?:[^/]+/)*puslapis/(\d+)/?$"),
     "houses": re.compile(r"/namai/(?:[^/]+/)*puslapis/(\d+)/?$"),
+    "apartments_rent": re.compile(r"/butu-nuoma/(?:[^/]+/)*puslapis/(\d+)/?$"),
+    "houses_rent": re.compile(r"/namu-nuoma/(?:[^/]+/)*puslapis/(\d+)/?$"),
 }
 
 

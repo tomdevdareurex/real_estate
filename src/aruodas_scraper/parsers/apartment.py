@@ -11,6 +11,7 @@ def parse_apartment(
     source_search_url: str,
     page: int,
     mapping_path: Path | None = None,
+    listing_type: str = "sale",
 ) -> tuple[ListingRecord, tuple[UnknownField, ...]]:
     """Parse a saved Aruodas apartment detail page."""
-    return parse_listing(html, "apartment", source_search_url, page, mapping_path)
+    return parse_listing(html, "apartment", source_search_url, page, mapping_path, listing_type)
