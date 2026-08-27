@@ -64,12 +64,12 @@ outputs, checkpoints, and logs are ignored by `.gitignore`.
 
 | Command | Data source | Key options | What it does |
 |---|---|---|---|
-| `parse-offline` | Local HTML files (no network) | `--input`, `--property-type {apartments,houses,all}`, `--city`, `--output`, `--checkpoint`, `--resume`, `--refresh`, `--translate`, `--config`, `--no-config` | Parses already-downloaded listing-detail pages from a directory. `--property-type all` auto-classifies each file by its canonical URL (apartment vs house). `--input` is required unless the run configuration supplies it. |
-| `scrape-live` | Live aruodas.lt (rate-limited, cached) | `--cities-config`, `--city`, `--property-type {apartments,houses,all}`, `--deal-type {sale,rent,all}`, `--output`, `--cache`, `--max-pages` (1-500), `--max-listings-per-category` (1-20000), `--timeout-seconds` (1-120), `--solve-on-block`, `--refresh-cache`, `--overwrite`, `--deepen`/`--no-deepen`, `--config`, `--no-config` | Follows configured search pages and retrieves bounded listing-detail pages, producing the same normalized CSV/JSON as offline parsing. Deepens listings already held as search cards by default; `--no-deepen` walks the search pages to discover new ones. `--deal-type` picks which side of the market to walk; `all` splits one per-IP request budget across four categories, so a focused run deepens its dataset roughly twice as fast. |
+| `parse-offline` | Local HTML files (no network) | `--input`, `--property-type {apartments,houses,all}`, `--city`, `--output`, `--checkpoint`, `--resume`, `--refresh`, `--translate`, `--config`, `--no-config`, `--profile` | Parses already-downloaded listing-detail pages from a directory. `--property-type all` auto-classifies each file by its canonical URL (apartment vs house). `--input` is required unless the run configuration supplies it. |
+| `scrape-live` | Live aruodas.lt (rate-limited, cached) | `--cities-config`, `--city`, `--property-type {apartments,houses,all}`, `--deal-type {sale,rent,all}`, `--output`, `--cache`, `--max-pages` (1-500), `--max-listings-per-category` (1-20000), `--timeout-seconds` (1-120), `--solve-on-block`, `--refresh-cache`, `--overwrite`, `--deepen`/`--no-deepen`, `--config`, `--no-config`, `--profile` | Follows configured search pages and retrieves bounded listing-detail pages, producing the same normalized CSV/JSON as offline parsing. Deepens listings already held as search cards by default; `--no-deepen` walks the search pages to discover new ones. `--deal-type` picks which side of the market to walk; `all` splits one per-IP request budget across four categories, so a focused run deepens its dataset roughly twice as fast. |
 | `mint-cookie` | A real Chrome window | `--output`, `--url`, `--profile-dir`, `--timeout-seconds` (10-1800), `--config`, `--no-config` | Opens Chrome, waits for you to solve any bot-protection challenge, then writes the session cookie to `cookie_file`. A solved challenge is what raises the request budget, so this is the fix for a run that dies after ~6 requests. Needs the optional `playwright` extra. |
 | `validate <csv_path>` | An exported CSV | — | Checks a CSV for duplicate listing IDs and reports total valid records. |
 | `report-unknown-fields` | `data/processed/unknown_fields.csv` | `--report` | Prints any Lithuanian attribute labels seen that aren't yet mapped in `field_mappings_lt_en.yaml`. |
-| `show-config` | `config/default.yaml` or the run configuration | `--config`, `--command {scrape-live,parse-offline}` | Displays the effective YAML configuration. With `--command`, prints the merged settings a run would actually use. |
+| `show-config` | `config/default.yaml` or the run configuration | `--config`, `--command {scrape-live,parse-offline}`, `--profile` | Displays the effective YAML configuration. With `--command`, prints the merged settings a run would actually use. |
 
 The `--property-type` option selects which parser handles each listing: `apartments` → `parse_apartment()` (adds `apartment_total_area_sqm`, `rooms`, `floor`/`total_floors`); `houses` → `parse_house()` (adds `house_total_area_sqm`, `plot_area_*`, `number_of_floors`). Both are thin wrappers around the same shared extraction logic in `parsers/common.py` — only the derived fields differ, not how price/coordinates/description/etc. are extracted.
 
@@ -91,6 +91,42 @@ directory.
 # See exactly what a run would use
 .venv\Scripts\python.exe -m aruodas_scraper show-config --command scrape-live
 ```
+
+#### Profiles: what job this run does
+
+A run either goes looking for listings it has never seen, or fills in the ones it already
+holds — the two compete for one per-IP request budget, so it does one or the other. That choice
+used to mean editing `deepen` and `max_listings_per_category` together and remembering to put
+them back. It is now one word:
+
+| profile | what the run does | `deepen` | `max_listings_per_category` |
+|---|---|---|---|
+| `pages` | walks **search** pages to discover listings not in the export yet | `false` | `1` |
+| `pubs` | fetches **detail** pages for listings already held as search cards | `true` | `10000` |
+| `all` | walks search pages, then spends what is left on details | `false` | `10000` |
+
+A profile is an overlay file sitting beside the base configuration and holding only the settings
+that differ — `config/scrape.pages.yaml`, `config/scrape.pubs.yaml`, `config/scrape.all.yaml`.
+Everything shared (city, pacing, cookie, transport) stays in `config/scrape.yaml`, so there is
+one copy of it. The overlay is always found next to the base file, because relative paths inside
+a configuration resolve against that file's own directory.
+
+```powershell
+# The profile: key in config/scrape.yaml decides; no flags needed
+.venv\Scripts\python.exe -m aruodas_scraper
+
+# Override it for one run, without editing anything
+.venv\Scripts\python.exe -m aruodas_scraper --profile pubs
+.venv\Scripts\python.exe -m aruodas_scraper scrape-live --profile pages
+
+# Check what a profile actually resolves to before spending a request budget on it
+.venv\Scripts\python.exe -m aruodas_scraper show-config --command scrape-live --profile pubs
+```
+
+Full precedence is **explicit CLI flag > profile overlay > base configuration > command
+default**, so `--profile pages --max-listings-per-category 9` still gets 9. `--no-config` ignores
+profiles along with everything else. A profile also suppresses the `ask_phase` prompt: it has
+already answered that question, and asking again would let the prompt quietly overrule it.
 
 #### Choosing the default command
 
@@ -161,6 +197,8 @@ request budget goes to detail pages. Pass --no-deepen to discover new listings i
 
 - Pass **`--no-deepen`** to go find *new* listings instead. That is the other half of the cycle:
   discover broadly with `--no-deepen`, then run the default repeatedly to fill the rows in.
+  `--profile pages` and `--profile pubs` are the packaged forms of those two halves — they set
+  the detail cap to match, which `--deepen` alone does not.
 - Cold start is automatic. An export with no card-only listings — a fresh checkout, or one where
   every row is already detailed — falls through to the search walk on its own.
 - `--overwrite` implies discovery, so it takes the search walk regardless.

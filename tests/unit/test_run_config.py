@@ -233,3 +233,124 @@ def test_an_unknown_deal_type_is_refused(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigurationError, match="deal_type"):
         load_run_config(path)
+
+
+BASE_WITH_PROFILE = """
+schema_version: 1
+profile: pages
+scrape_live:
+  city: vilnius
+  max_pages: 200
+  max_listings_per_category: 40
+  deepen: true
+  output: ../exports
+"""
+
+PAGES_OVERLAY = """
+scrape_live:
+  deepen: false
+  max_listings_per_category: 1
+"""
+
+
+def _write_profile(directory: Path, name: str, content: str) -> None:
+    _write(directory / f"scrape.{name}.yaml", content)
+
+
+@pytest.mark.unit
+def test_a_profile_overlay_wins_over_the_base_and_leaves_the_rest_alone(tmp_path: Path) -> None:
+    base = _write(tmp_path / "scrape.yaml", BASE_WITH_PROFILE)
+    _write_profile(tmp_path, "pages", PAGES_OVERLAY)
+
+    config = load_run_config(base)
+
+    assert config.profile == "pages"
+    assert config.scrape_live.deepen is False
+    assert config.scrape_live.max_listings_per_category == 1
+    # Untouched by the overlay, so the base still decides.
+    assert config.scrape_live.city == "vilnius"
+    assert config.scrape_live.max_pages == 200
+
+
+@pytest.mark.unit
+def test_an_explicit_profile_argument_beats_the_files_own_key(tmp_path: Path) -> None:
+    base = _write(tmp_path / "scrape.yaml", BASE_WITH_PROFILE)
+    _write_profile(tmp_path, "pages", PAGES_OVERLAY)
+    _write_profile(tmp_path, "pubs", "scrape_live:\n  max_listings_per_category: 10000\n")
+
+    config = load_run_config(base, "pubs")
+
+    assert config.profile == "pubs"
+    assert config.scrape_live.max_listings_per_category == 10000
+    # The base's own `deepen` stands, because the pubs overlay says nothing about it.
+    assert config.scrape_live.deepen is True
+
+
+@pytest.mark.unit
+def test_no_profile_anywhere_leaves_the_base_untouched(tmp_path: Path) -> None:
+    base = _write(tmp_path / "scrape.yaml", VALID)
+
+    config = load_run_config(base)
+
+    assert config.profile is None
+    assert config.scrape_live.max_listings_per_category == 40
+
+
+@pytest.mark.unit
+def test_an_unknown_profile_names_the_ones_that_exist(tmp_path: Path) -> None:
+    base = _write(tmp_path / "scrape.yaml", VALID)
+    _write_profile(tmp_path, "pages", PAGES_OVERLAY)
+    _write_profile(tmp_path, "pubs", PAGES_OVERLAY)
+
+    with pytest.raises(ConfigurationError, match="Available: pages, pubs"):
+        load_run_config(base, "nope")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("name", ["../../etc/passwd", "Pages", "a/b", "", "1pages"])
+def test_a_profile_name_that_could_escape_the_config_directory_is_rejected(
+    tmp_path: Path, name: str
+) -> None:
+    base = _write(tmp_path / "scrape.yaml", VALID)
+
+    with pytest.raises(ConfigurationError, match="Profile name must be"):
+        load_run_config(base, name)
+
+
+@pytest.mark.unit
+def test_an_overlay_may_not_set_anything_but_the_command_sections(tmp_path: Path) -> None:
+    base = _write(tmp_path / "scrape.yaml", VALID)
+    _write_profile(tmp_path, "pages", "profile: pubs\nscrape_live:\n  deepen: false\n")
+
+    with pytest.raises(ConfigurationError, match="overlays do not chain"):
+        load_run_config(base, "pages")
+
+
+@pytest.mark.unit
+def test_a_missing_overlay_file_is_reported_even_when_no_profiles_exist(tmp_path: Path) -> None:
+    base = _write(tmp_path / "scrape.yaml", VALID)
+
+    with pytest.raises(ConfigurationError, match="Available: none"):
+        load_run_config(base, "pages")
+
+
+@pytest.mark.unit
+def test_paths_still_resolve_against_the_base_file_when_an_overlay_applies(
+    tmp_path: Path,
+) -> None:
+    base = _write(tmp_path / "conf" / "scrape.yaml", BASE_WITH_PROFILE)
+    _write_profile(tmp_path / "conf", "pages", "scrape_live:\n  cache: cache\n")
+
+    config = load_run_config(base)
+
+    assert config.scrape_live.output == (tmp_path / "exports").resolve()
+    assert config.scrape_live.cache == (tmp_path / "conf" / "cache").resolve()
+
+
+@pytest.mark.unit
+def test_an_overlay_is_validated_like_the_base(tmp_path: Path) -> None:
+    base = _write(tmp_path / "scrape.yaml", VALID)
+    _write_profile(tmp_path, "pages", "scrape_live:\n  max_pages: 0\n")
+
+    with pytest.raises(ConfigurationError, match="Invalid run configuration"):
+        load_run_config(base, "pages")

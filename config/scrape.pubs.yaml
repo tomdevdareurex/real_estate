@@ -1,0 +1,12 @@
+# Profile: pubs - spend the whole run on DETAIL pages for listings already held as search cards.
+#
+# Merged over scrape.yaml when `profile: pubs` is set there or `--profile pubs` is passed.
+#
+# deepen: true seeds phase B from card-only rows already in the export and skips the search walk,
+# so no request is spent on a page that has already been harvested. An export with no card-only
+# rows falls back to the search walk on its own, so a fresh checkout still works.
+#
+# max_pages in the base file is not read in this mode - there is no search walk to bound.
+scrape_live:
+  deepen: true
+  max_listings_per_category: 10000

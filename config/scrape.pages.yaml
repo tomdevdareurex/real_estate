@@ -1,0 +1,17 @@
+# Profile: pages - walk SEARCH pages to discover listings that are not in the export yet.
+#
+# Merged over scrape.yaml when `profile: pages` is set there or `--profile pages` is passed.
+# Only the two settings that distinguish this mode belong here; everything else - city, pacing,
+# cookie, transport - stays in the base file so there is one copy of it.
+#
+# deepen: false is what makes the run walk search pages at all. A run left to deepen skips the
+# search walk entirely whenever the export still holds card-only rows, which is why a run that
+# only turned refresh_cache on still found nothing new.
+#
+# max_listings_per_category: 1 keeps phase B from eating the budget. Both phases draw on one
+# per-IP request count and phase A runs first, so an uncapped detail phase would spend whatever
+# the search walk left on details instead of on more search pages. One per category still banks
+# a detail record when something new turns up.
+scrape_live:
+  deepen: false
+  max_listings_per_category: 1

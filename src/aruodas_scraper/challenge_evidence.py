@@ -1,9 +1,15 @@
-"""
+"""Read-only capture of whatever the origin raises in a mint window.
+
 A challenge is the least observable moment in a run: it appears in a window nobody is
 watching yet, is cleared by hand, and leaves nothing behind. When a mint later fails, or the
 origin changes what it raises, there is no record of what was actually on screen - only that
-the wait ran out.
+the wait ran out. This module writes that record: a screenshot and a frame-by-frame summary,
+every time a challenge is raised.
 
+Nothing here touches the challenge. It is not clicked, focused, scrolled or answered, and it
+must stay that way: the solve is the human attestation the raised request budget pays for, so
+automating it would both falsify that attestation and put the project outside what it is
+authorized to do. See AGENTS.md, 2026-08-22. The capture only ever reads.
 """
 
 from __future__ import annotations
@@ -13,203 +19,39 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-HOLD_SECONDS = 10.0
 DEFAULT_SETTLE_SECONDS = 2.0
 _SETTLE_POLL_SECONDS = 0.2
 _STAMP_FORMAT = "%Y%m%d-%H%M%S"
 _UNLOADED_FRAME_URLS = {"", "about:blank"}
 _FRAME_TEXT_BUDGET = 160
 
-# def record_challenge(
-#     directory: Path, *, settle_seconds: float = DEFAULT_SETTLE_SECONDS
-# ) -> Callable[[Any], None]:
-#     """Return an observer that targets the center of the red challenge capsule."""
-
-#     def observe(page: Any) -> None:
-#         directory.mkdir(parents=True, exist_ok=True)
-#         settled = _wait_for_frames(page, settle_seconds)
-#         stamp = datetime.now(timezone.utc).strftime(_STAMP_FORMAT)
-
-#         _write_screenshot(page, directory / f"challenge-{stamp}.png")
-#         _write_summary(page, directory / f"challenge-{stamp}.txt", stamp, settled=settled)
-
-#         print("\n== Locating Challenge Target ==")
-
-#         # 1. Target the outer iframe element on the top-level page
-#         iframe = page.locator('iframe[title="Human verification challenge"]').first
-#         iframe.wait_for(state="attached", timeout=15000)
-
-#         # 2. Poll for the outer box layout
-#         box = None
-#         for _ in range(30):
-#             box = iframe.bounding_box()
-#             if box and box["width"] > 0:
-#                 break
-#             page.wait_for_timeout(100)
-
-#         if box and box["width"] > 0:
-#             centre_x = box["x"] + (box["width"] / 2)
-#             # Reduced vertical offset to hit exact button center
-#             centre_y = box["y"] + (box["height"] / 2) + 50
-#             print(f"== Calculated Button Position: ({centre_x:.1f}, {centre_y:.1f}) ==")
-#         else:
-#             print("  Iframe box unavailable; targeting adjusted viewport center...")
-#             viewport = page.viewport_size or {"width": 1280, "height": 720}
-#             centre_x = viewport["width"] / 2
-#             # Reduced offset to +50px relative to viewport center
-#             centre_y = (viewport["height"] / 2) + 50
-
-#         print(f"== Target Coordinates: ({centre_x:.1f}, {centre_y:.1f}) ==")
-
-#         # 3. Draw visual marker on screen
-#         page.evaluate(
-#             """({x, y}) => {
-#                 let dot = document.getElementById('debug-mouse-pointer');
-#                 if (!dot) {
-#                     dot = document.createElement('div');
-#                     dot.id = 'debug-mouse-pointer';
-#                     dot.style.position = 'fixed';
-#                     dot.style.width = '24px';
-#                     dot.style.height = '24px';
-#                     dot.style.backgroundColor = 'red';
-#                     dot.style.border = '3px solid white';
-#                     dot.style.borderRadius = '50%';
-#                     dot.style.zIndex = '2147483647';
-#                     dot.style.pointerEvents = 'none';
-#                     dot.style.transform = 'translate(-50%, -50%)';
-#                     dot.style.boxShadow = '0 0 10px rgba(0,0,0,0.5)';
-#                     document.body.appendChild(dot);
-#                 }
-#                 dot.style.left = `${x}px`;
-#                 dot.style.top = `${y}px`;
-#             }""",
-#             {"x": centre_x, "y": centre_y},
-#         )
-
-#         print(f"== Holding button for {HOLD_SECONDS}s ==")
-
-#         # 4. Move mouse and execute hold
-#         page.mouse.move(centre_x, centre_y, steps=15)
-#         page.mouse.down()
-#         try:
-#             page.wait_for_timeout(HOLD_SECONDS * 1000)
-#         finally:
-#             page.mouse.up()
-import random
-import time
-from typing import Any, Callable
-from pathlib import Path
-from datetime import datetime, timezone
-
-import random
-from typing import Any, Callable
-from pathlib import Path
-from datetime import datetime, timezone
 
 def record_challenge(
-    directory: Path, *, settle_seconds: float = 2.0
+    directory: Path, *, settle_seconds: float = DEFAULT_SETTLE_SECONDS
 ) -> Callable[[Any], None]:
-    """Return an observer that targets the center of the red challenge capsule."""
+    """Return an observer that writes a screenshot and a summary of what was raised.
+
+    Args:
+        directory: Where the pair of files lands; created on demand. Keep it out of the
+            repository - a capture is a picture of a live session.
+        settle_seconds: How long to give a sub-frame to report a real URL before capturing
+            anyway. The hook fires before the widget has drawn, so a capture taken at once
+            is an artefact of the timing rather than a finding. Zero disables the wait.
+
+    Returns:
+        A callable taking a Playwright page, suitable as a challenge observer.
+    """
 
     def observe(page: Any) -> None:
         directory.mkdir(parents=True, exist_ok=True)
-        
-        print("\n== Locating Challenge Target ==")
+        settled = _wait_for_frames(page, settle_seconds)
+        stamp = datetime.now(timezone.utc).strftime(_STAMP_FORMAT)
 
-        # Outer loop: Try up to 3 times before giving up
-        for attempt in range(1, 4):
-            print(f"\n== Attempt {attempt} ==")
-
-            # 1. Target the outer iframe element
-            iframe = page.locator('iframe[title="Human verification challenge"]').first
-            
-            try:
-                # If it doesn't attach within 5 seconds, it's likely gone/solved
-                iframe.wait_for(state="attached", timeout=5000)
-            except Exception:
-                print("== No challenge iframe found. Challenge cleared! ==")
-                break
-
-            # 2. Poll for the outer box layout
-            box = None
-            for _ in range(30):
-                box = iframe.bounding_box()
-                if box and box["width"] > 0:
-                    break
-                page.wait_for_timeout(100)
-
-            if box and box["width"] > 0:
-                variance_x = random.uniform(-10, 10)
-                variance_y = random.uniform(-5, 5)
-                centre_x = box["x"] + (box["width"] / 2) + variance_x
-                centre_y = box["y"] + (box["height"] / 2) + 50 + variance_y
-            else:
-                print("  Iframe box unavailable; targeting adjusted viewport center...")
-                viewport = page.viewport_size or {"width": 1280, "height": 720}
-                centre_x = (viewport["width"] / 2) + random.uniform(-15, 15)
-                centre_y = (viewport["height"] / 2) + 50 + random.uniform(-10, 10)
-
-            print(f"== Target Coordinates: ({centre_x:.1f}, {centre_y:.1f}) ==")
-
-            # 3. Draw visual marker on screen
-            page.evaluate(
-                """({x, y}) => {
-                    let dot = document.getElementById('debug-mouse-pointer');
-                    if (!dot) {
-                        dot = document.createElement('div');
-                        dot.id = 'debug-mouse-pointer';
-                        dot.style.position = 'fixed';
-                        dot.style.width = '24px';
-                        dot.style.height = '24px';
-                        dot.style.backgroundColor = 'red';
-                        dot.style.border = '3px solid white';
-                        dot.style.borderRadius = '50%';
-                        dot.style.zIndex = '2147483647';
-                        dot.style.pointerEvents = 'none';
-                        dot.style.transform = 'translate(-50%, -50%)';
-                        dot.style.boxShadow = '0 0 10px rgba(0,0,0,0.5)';
-                        document.body.appendChild(dot);
-                    }
-                    dot.style.left = `${x}px`;
-                    dot.style.top = `${y}px`;
-                }""",
-                {"x": centre_x, "y": centre_y},
-            )
-
-            # 4. Move mouse (Simple curved approach)
-            waypoint_x = centre_x + random.choice([-1, 1]) * random.uniform(50, 150)
-            waypoint_y = centre_y + random.choice([-1, 1]) * random.uniform(20, 80)
-            
-            page.mouse.move(waypoint_x, waypoint_y, steps=random.randint(5, 12))
-            page.wait_for_timeout(random.randint(20, 80)) 
-            page.mouse.move(centre_x, centre_y, steps=random.randint(15, 25))
-            page.wait_for_timeout(random.randint(100, 300))
-
-            print("== Holding button strictly for 10 seconds ==")
-
-            # 5. Execute hard 10-second hold (with micro-movements to avoid bot detection)
-            page.mouse.down()
-            try:
-                # 20 loops * 0.5s sleep = 10 seconds total hold time
-                for _ in range(20):
-                    jitter_x = centre_x + random.uniform(-2, 2)
-                    jitter_y = centre_y + random.uniform(-2, 2)
-                    page.mouse.move(jitter_x, jitter_y, steps=2)
-                    page.wait_for_timeout(500)
-            finally:
-                page.mouse.up()
-            
-            print("== Released. Waiting to check if challenge remains... ==")
-            
-            # 6. Wait a random moment (2 to 4 seconds) to let Cloudflare load the success state
-            page.wait_for_timeout(random.randint(2000, 4000))
-            
-            # If the box is still taking up space on the screen, the loop restarts
-            if not iframe.is_visible():
-                print("== Challenge solved successfully! ==")
-                break
+        _write_screenshot(page, directory / f"challenge-{stamp}.png")
+        _write_summary(page, directory / f"challenge-{stamp}.txt", stamp, settled=settled)
 
     return observe
+
 
 def _wait_for_frames(page: Any, settle_seconds: float) -> bool:
     """Wait until a sub-frame reports a real URL; report whether one ever did.

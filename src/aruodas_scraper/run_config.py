@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -19,6 +20,9 @@ PropertyTypeOption = Literal["apartments", "houses", "all"]
 DealTypeOption = Literal["sale", "rent", "all"]
 TransportOption = Literal["curl", "httpx"]
 _CITY_PATTERN = r"^[a-z][a-z0-9_-]*$"
+# A profile name is interpolated into a filename, so it may not carry a separator or a `..`.
+_PROFILE_PATTERN = r"^[a-z][a-z0-9_-]*$"
+_SECTION_NAMES = ("scrape_live", "parse_offline")
 
 
 class ScrapeLiveOptions(BaseModel):
@@ -108,6 +112,10 @@ class RunConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[1]
+    # Overlay merged over this file: `profile: pages` also reads `scrape.pages.yaml` beside it,
+    # and whatever that sets wins here. It exists so switching what a run does is one word rather
+    # than three settings that have to agree - see `load_run_config`.
+    profile: str | None = Field(default=None, pattern=_PROFILE_PATTERN)
     scrape_live: ScrapeLiveOptions = ScrapeLiveOptions()
     parse_offline: ParseOfflineOptions = ParseOfflineOptions()
 
@@ -155,33 +163,119 @@ def _resolve_paths(section: BaseModel, base_directory: Path) -> BaseModel:
     return section.model_copy(update=updates)
 
 
-def load_run_config(path: Path) -> RunConfig:
-    """Load and validate a run configuration file.
-
-    Relative paths are resolved against the configuration file's directory.
-
-    Args:
-        path: YAML file containing the run configuration.
-
-    Returns:
-        Validated immutable run configuration.
-
-    Raises:
-        ConfigurationError: If the file cannot be read or fails validation.
-    """
+def _read_mapping(path: Path) -> dict[str, Any]:
+    """Read one configuration file into a mapping, or say why it could not be read."""
     try:
         if path.stat().st_size > MAX_CONFIG_BYTES:
             raise ConfigurationError(f"Run configuration exceeds {MAX_CONFIG_BYTES} bytes: {path}")
         raw_data = yaml.safe_load(path.read_text(encoding="utf-8"))
-        if not isinstance(raw_data, dict):
-            raise ConfigurationError("Run configuration must contain a YAML mapping.")
-        parsed = RunConfig.model_validate(raw_data)
     except FileNotFoundError as error:
         raise ConfigurationError(f"Run configuration file was not found: {path}") from error
     except (OSError, UnicodeError) as error:
         raise ConfigurationError(f"Run configuration could not be read: {path}") from error
     except yaml.YAMLError as error:
         raise ConfigurationError(f"Run configuration contains invalid YAML: {path}") from error
+    if not isinstance(raw_data, dict):
+        raise ConfigurationError("Run configuration must contain a YAML mapping.")
+    return raw_data
+
+
+def _overlay_path(base: Path, profile: str) -> Path:
+    """Return the overlay file for a profile, which always sits beside the base file.
+
+    Same-directory is not a convention but a requirement: `_resolve_paths` resolves relative
+    paths against the configuration file's directory, so an overlay elsewhere would give the
+    merged result two different path bases.
+    """
+    return base.with_name(f"{base.stem}.{profile}{base.suffix}")
+
+
+def _available_profiles(base: Path) -> list[str]:
+    """Name the overlays that exist beside a base file, for an error worth reading."""
+    prefix = f"{base.stem}."
+    try:
+        candidates = sorted(base.parent.glob(f"{prefix}*{base.suffix}"))
+    except OSError:  # pragma: no cover - an unreadable directory is not worth failing over
+        return []
+    return [candidate.stem[len(prefix) :] for candidate in candidates]
+
+
+def _merged_sections(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    """Layer an overlay's sections over the base, key by key within each section."""
+    merged = dict(base)
+    for name, section in overlay.items():
+        current = merged.get(name)
+        merged[name] = (
+            {**current, **section}
+            if isinstance(current, dict) and isinstance(section, dict)
+            else section
+        )
+    return merged
+
+
+def _selected_profile(raw_data: dict[str, Any], profile: str | None) -> str | None:
+    """Decide which profile applies: an explicit argument beats the file's own key."""
+    selected = profile if profile is not None else raw_data.get("profile")
+    if selected is None:
+        return None
+    if not isinstance(selected, str):
+        raise ConfigurationError(
+            f"Profile name must be a string, not {type(selected).__name__}: {selected!r}"
+        )
+    if re.fullmatch(_PROFILE_PATTERN, selected) is None:
+        raise ConfigurationError(
+            "Profile name must be lowercase letters or digits, optionally with '-' or '_': "
+            f"{selected!r}"
+        )
+    return selected
+
+
+def _apply_profile(path: Path, raw_data: dict[str, Any], profile: str) -> dict[str, Any]:
+    """Merge the named overlay over an already-read base mapping."""
+    overlay_path = _overlay_path(path, profile)
+    if not overlay_path.is_file():
+        available = ", ".join(_available_profiles(path)) or "none"
+        raise ConfigurationError(
+            f"Profile {profile!r} was not found at {overlay_path}. Available: {available}"
+        )
+    overlay = _read_mapping(overlay_path)
+    unexpected = sorted(str(name) for name in set(overlay) - set(_SECTION_NAMES))
+    if unexpected:
+        raise ConfigurationError(
+            f"A profile overlay may only set {' or '.join(_SECTION_NAMES)}, so overlays do not "
+            f"chain; {overlay_path} also sets: {', '.join(unexpected)}"
+        )
+    merged = _merged_sections(raw_data, overlay)
+    # Record what actually applied, not what the file asked for, so `--profile` is visible
+    # downstream even when it overrode the file's own key.
+    merged["profile"] = profile
+    return merged
+
+
+def load_run_config(path: Path, profile: str | None = None) -> RunConfig:
+    """Load and validate a run configuration file, merging a profile overlay when one applies.
+
+    Precedence is overlay over base file, and `profile` over the file's own `profile` key.
+    Relative paths are resolved against the base configuration file's directory.
+
+    Args:
+        path: YAML file containing the run configuration.
+        profile: Overlay to merge over it, read from `<stem>.<profile><suffix>` beside `path`.
+            Overrides any `profile` key in the file; None leaves that key in charge.
+
+    Returns:
+        Validated immutable run configuration.
+
+    Raises:
+        ConfigurationError: If either file cannot be read or the merged result fails validation.
+    """
+    raw_data = _read_mapping(path)
+    selected = _selected_profile(raw_data, profile)
+    if selected is not None:
+        raw_data = _apply_profile(path, raw_data, selected)
+
+    try:
+        parsed = RunConfig.model_validate(raw_data)
     except ValidationError as error:
         raise ConfigurationError(f"Invalid run configuration: {_describe(error)}") from error
 

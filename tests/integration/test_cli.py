@@ -629,3 +629,189 @@ def test_bare_invocation_reports_two_commands_in_the_same_state(
 
     assert result.exit_code == 1
     assert "exactly one command must be enabled" in result.output
+
+
+def _write_profile_overlay(config_path: Path, name: str, body: str) -> None:
+    """Write an overlay beside a base config, which is where load_run_config looks for it."""
+    config_path.with_name(f"{config_path.stem}.{name}{config_path.suffix}").write_text(
+        body, encoding="utf-8"
+    )
+
+
+@pytest.mark.integration
+def test_scrape_live_profile_overlay_reaches_the_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured = _capture_scrape_live(monkeypatch)
+    config = _write_run_config(tmp_path, "scrape_live:\n  deepen: true\n  max_pages: 4\n")
+    _write_profile_overlay(
+        config, "pages", "scrape_live:\n  deepen: false\n  max_listings_per_category: 1\n"
+    )
+
+    result = runner.invoke(app, ["scrape-live", "--config", str(config), "--profile", "pages"])
+
+    assert result.exit_code == 0
+    assert captured["deepen"] is False
+    assert captured["max_listings_per_category"] == 1
+    assert captured["max_pages"] == 4
+
+
+@pytest.mark.integration
+def test_scrape_live_profile_may_be_given_before_the_subcommand(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured = _capture_scrape_live(monkeypatch)
+    config = _write_run_config(tmp_path, "scrape_live:\n  deepen: true\n")
+    _write_profile_overlay(config, "pages", "scrape_live:\n  deepen: false\n")
+
+    result = runner.invoke(app, ["--profile", "pages", "scrape-live", "--config", str(config)])
+
+    assert result.exit_code == 0
+    assert captured["deepen"] is False
+
+
+@pytest.mark.integration
+def test_scrape_live_command_line_options_override_the_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured = _capture_scrape_live(monkeypatch)
+    config = _write_run_config(tmp_path, "scrape_live:\n  max_pages: 4\n")
+    _write_profile_overlay(
+        config, "pages", "scrape_live:\n  deepen: false\n  max_listings_per_category: 1\n"
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "scrape-live",
+            "--config",
+            str(config),
+            "--profile",
+            "pages",
+            "--max-listings-per-category",
+            "9",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["max_listings_per_category"] == 9
+    assert captured["deepen"] is False
+
+
+@pytest.mark.integration
+def test_scrape_live_no_config_ignores_the_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured = _capture_scrape_live(monkeypatch)
+    config = _write_run_config(tmp_path, "scrape_live:\n  max_pages: 4\n")
+    _write_profile_overlay(config, "pages", "scrape_live:\n  max_listings_per_category: 1\n")
+
+    result = runner.invoke(
+        app,
+        ["scrape-live", "--config", str(config), "--no-config", "--profile", "pages"],
+    )
+
+    assert result.exit_code == 0
+    assert captured["max_listings_per_category"] == 20
+
+
+@pytest.mark.integration
+def test_scrape_live_reports_an_unknown_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _capture_scrape_live(monkeypatch)
+    config = _write_run_config(tmp_path, "scrape_live:\n  max_pages: 4\n")
+
+    result = runner.invoke(app, ["scrape-live", "--config", str(config), "--profile", "nope"])
+
+    assert result.exit_code == 1
+    assert "was not found" in result.output
+
+
+@pytest.mark.integration
+def test_a_profile_answers_the_phase_question_so_it_is_never_asked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A profile states the deepen/discover choice; the prompt must not overrule it."""
+    captured = _capture_scrape_live(monkeypatch)
+    config = _write_run_config(
+        tmp_path, "scrape_live:\n  ask_phase: true\n  deepen: true\n  max_pages: 1\n"
+    )
+    _write_profile_overlay(config, "pages", "scrape_live:\n  deepen: false\n")
+    monkeypatch.setattr("aruodas_scraper.cli.sys.stdin.isatty", lambda: True)
+
+    def refuse(*args: object, **kwargs: object) -> bool:
+        raise AssertionError("the phase prompt ran despite a profile being in force")
+
+    monkeypatch.setattr("aruodas_scraper.cli._choose_deepen", refuse)
+
+    result = runner.invoke(app, ["scrape-live", "--config", str(config), "--profile", "pages"])
+
+    assert result.exit_code == 0
+    assert captured["deepen"] is False
+
+
+@pytest.mark.integration
+def test_bare_invocation_honours_the_profile_key_in_the_discovered_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured = _capture_scrape_live(monkeypatch)
+    _write_discovered_config(
+        tmp_path,
+        "profile: pages\nscrape_live:\n  enabled: true\n  deepen: true\n"
+        "parse_offline:\n  enabled: false\n",
+    )
+    _write_profile_overlay(
+        tmp_path / "config" / "scrape.yaml",
+        "pages",
+        "scrape_live:\n  deepen: false\n  max_listings_per_category: 1\n",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, [])
+
+    assert result.exit_code == 0
+    assert captured["deepen"] is False
+    assert captured["max_listings_per_category"] == 1
+
+
+@pytest.mark.integration
+def test_show_config_reflects_the_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_discovered_config(tmp_path, "scrape_live:\n  deepen: true\n")
+    _write_profile_overlay(
+        tmp_path / "config" / "scrape.yaml", "pages", "scrape_live:\n  deepen: false\n"
+    )
+    # show-config's own --config defaults to config/default.yaml with exists=True, so click
+    # rejects the invocation before the command body runs unless that file is here too.
+    shutil.copy("config/default.yaml", tmp_path / "config" / "default.yaml")
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["show-config", "--command", "scrape-live", "--profile", "pages"])
+
+    assert result.exit_code == 0
+    assert "deepen: false" in result.stdout
+
+
+@pytest.mark.integration
+def test_a_bare_invocation_takes_the_profile_given_before_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`python -m aruodas_scraper --profile pages` - the headline way to pick a job."""
+    captured = _capture_scrape_live(monkeypatch)
+    _write_discovered_config(
+        tmp_path,
+        "profile: pubs\nscrape_live:\n  enabled: true\nparse_offline:\n  enabled: false\n",
+    )
+    base = tmp_path / "config" / "scrape.yaml"
+    _write_profile_overlay(base, "pubs", "scrape_live:\n  deepen: true\n")
+    _write_profile_overlay(
+        base, "pages", "scrape_live:\n  deepen: false\n  max_listings_per_category: 1\n"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["--profile", "pages"])
+
+    assert result.exit_code == 0
+    # The flag beats `profile: pubs` in the file it discovered.
+    assert captured["deepen"] is False
+    assert captured["max_listings_per_category"] == 1

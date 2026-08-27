@@ -72,19 +72,41 @@ _CONFIG_OPTION = typer.Option(
     help=f"Run configuration file. Defaults to {DEFAULT_RUN_CONFIG} when it exists.",
 )
 _NO_CONFIG_OPTION = typer.Option("--no-config", help="Ignore any run configuration file.")
+_PROFILE_OPTION = typer.Option(
+    "--profile",
+    help="Profile overlay merged over the run configuration, read from "
+    "<config>.<profile>.yaml beside it. Overrides the file's own `profile` key.",
+)
 
 _DOCTOR_ROBOTS_URL = "https://www.aruodas.lt/robots.txt"
 _DOCTOR_SEARCH_URL = "https://www.aruodas.lt/butai/vilniuje/"
 
 
-def _effective_config(config: Path | None, no_config: bool) -> RunConfig | None:
-    """Resolve the run configuration, honouring explicit paths and auto-discovery."""
+def _effective_config(
+    config: Path | None, no_config: bool, profile: str | None = None
+) -> RunConfig | None:
+    """Resolve the run configuration, honouring explicit paths, profiles and discovery."""
     if no_config:
         return None
+    profile = _active_profile(profile)
     if config is not None:
-        return load_run_config(config)
+        return load_run_config(config, profile)
     discovered = Path(DEFAULT_RUN_CONFIG)
-    return load_run_config(discovered) if discovered.is_file() else None
+    return load_run_config(discovered, profile) if discovered.is_file() else None
+
+
+def _active_profile(explicit: str | None) -> str | None:
+    """Return a subcommand's own --profile, else the one given before the subcommand.
+
+    A profile named in neither place is left to the configuration file's own `profile`
+    key, which `load_run_config` reads for itself; None here means "no opinion from the
+    command line", not "no profile".
+    """
+    if explicit is not None:
+        return explicit
+    context = click.get_current_context(silent=True)
+    root_profile = context.find_root().obj if context is not None else None
+    return root_profile if isinstance(root_profile, str) else None
 
 
 def _resolve(name: str, cli_value: _T, config_value: _T | None) -> _T:
@@ -163,10 +185,10 @@ _COMMAND_DEFAULTS: dict[str, dict[str, object]] = {
 }
 
 
-def _effective_settings(command: str) -> dict[str, object]:
-    """Merge command defaults with any discovered run configuration."""
+def _effective_settings(command: str, profile: str | None = None) -> dict[str, object]:
+    """Merge command defaults with the discovered run configuration and profile overlay."""
     settings = dict(_COMMAND_DEFAULTS[command])
-    discovered = _effective_config(None, no_config=False)
+    discovered = _effective_config(None, no_config=False, profile=profile)
     if discovered is not None:
         section = discovered.scrape_live if command == "scrape-live" else discovered.parse_offline
         settings.update(
@@ -178,9 +200,15 @@ def _effective_settings(command: str) -> dict[str, object]:
 
 
 @app.callback(invoke_without_command=True)
-def main(context: typer.Context) -> None:
+def main(
+    context: typer.Context,
+    profile: Annotated[str | None, _PROFILE_OPTION] = None,
+) -> None:
     """Parse Aruodas HTML into normalized English datasets."""
     configure_logging()
+    # Stashed on the root context so a subcommand that was not given its own --profile
+    # still sees one typed before the subcommand name.
+    context.obj = profile
     if context.invoked_subcommand is not None:
         return
     try:
@@ -213,10 +241,11 @@ def parse_offline_command(
     translate: Annotated[bool, typer.Option(help="Reserved for a configured provider.")] = False,
     config: Annotated[Path | None, _CONFIG_OPTION] = None,
     no_config: Annotated[bool, _NO_CONFIG_OPTION] = False,
+    profile: Annotated[str | None, _PROFILE_OPTION] = None,
 ) -> None:
     """Parse listing-detail HTML files from a local directory."""
     try:
-        settings = _effective_config(config, no_config)
+        settings = _effective_config(config, no_config, profile)
     except ConfigurationError as error:
         typer.echo(f"Offline parse failed: {error}", err=True)
         raise typer.Exit(code=1) from error
@@ -450,10 +479,11 @@ def scrape_live_command(
     ] = None,
     config: Annotated[Path | None, _CONFIG_OPTION] = None,
     no_config: Annotated[bool, _NO_CONFIG_OPTION] = False,
+    profile: Annotated[str | None, _PROFILE_OPTION] = None,
 ) -> None:
     """Retrieve and parse a bounded live Aruodas snapshot."""
     try:
-        settings = _effective_config(config, no_config)
+        settings = _effective_config(config, no_config, profile)
     except ConfigurationError as error:
         typer.echo(f"Live scrape failed: {error}", err=True)
         raise typer.Exit(code=1) from error
@@ -561,9 +591,11 @@ def scrape_live_command(
         chosen_explicitly = (
             context is not None
             and context.get_parameter_source("deepen") is ParameterSource.COMMANDLINE
-        )
+        ) or (settings is not None and settings.profile is not None)
         # Never block an unattended run on a question nobody is there to answer: without a
         # terminal the configured `deepen` stands, which is the behaviour CI already relies on.
+        # A profile counts as an answer too: it exists to state exactly this choice, and
+        # asking again would let the prompt silently overrule the profile the run started with.
         if ask_phase and not chosen_explicitly and sys.stdin.isatty():
             deepen = _choose_deepen(
                 deepen, output, registry, city, property_type, deal_type, max_pages
@@ -1027,12 +1059,18 @@ def show_config(
         str | None,
         typer.Option(help="Show merged run settings for scrape-live or parse-offline."),
     ] = None,
+    profile: Annotated[str | None, _PROFILE_OPTION] = None,
 ) -> None:
     """Display the effective YAML configuration in English."""
     if command is not None:
         if command not in {"scrape-live", "parse-offline"}:
             raise typer.BadParameter("command must be scrape-live or parse-offline")
-        typer.echo(yaml.safe_dump(_effective_settings(command), sort_keys=True))
+        try:
+            merged = _effective_settings(command, profile)
+        except ConfigurationError as error:
+            typer.echo(f"Run configuration failed: {error}", err=True)
+            raise typer.Exit(code=1) from error
+        typer.echo(yaml.safe_dump(merged, sort_keys=True))
         return
     data = yaml.safe_load(config.read_text(encoding="utf-8"))
     typer.echo(yaml.safe_dump(data, sort_keys=True))
