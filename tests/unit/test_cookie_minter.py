@@ -199,17 +199,34 @@ def test_only_this_origins_cookies_leave_the_browser_profile(
 
 
 @pytest.mark.unit
-def test_the_browser_is_real_chrome_and_visible(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_the_browser_is_visible(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Headless Chrome names itself in its own User-Agent and cannot clear a challenge."""
     driver, _, _ = _install_fake(monkeypatch, contents=[_REAL_PAGE], cookies=[_px_cookie()])
     clock = _FakeClock()
 
     mint_cookie(profile_dir=tmp_path / "profile", sleeper=clock.advance, clock=clock)
 
-    assert driver.launch_kwargs["channel"] == "chrome"
     assert driver.launch_kwargs["headless"] is False
+
+
+@pytest.mark.unit
+def test_the_browser_is_playwrights_own_chromium(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Not `channel="chrome"`, and the omission is load-bearing rather than an oversight.
+
+    This workstation sets the `RemoteDebuggingAllowed=0` policy for Google Chrome and Edge,
+    which kills the `--remote-debugging-pipe` Playwright drives the browser over: the window
+    opens, the connection never arrives, and the launch times out. The policy does not name
+    Chromium, so the bundled build is the only one that can be driven here. Asserting the
+    absence keeps a future "surely it should use real Chrome" from silently reintroducing it.
+    """
+    driver, _, _ = _install_fake(monkeypatch, contents=[_REAL_PAGE], cookies=[_px_cookie()])
+    clock = _FakeClock()
+
+    mint_cookie(profile_dir=tmp_path / "profile", sleeper=clock.advance, clock=clock)
+
+    assert "channel" not in driver.launch_kwargs
 
 
 @pytest.mark.unit

@@ -1,9 +1,26 @@
 schema_version: 1
 
-# For a run to reload pages from the origin instead of replaying them from disk, it needs to be both refresh_cache and deepen. The former makes it hit the website, the latter makes it skip the search walk and go straight to detail pages. A run that is only refresh_cache will still fall through to the search walk, which is why a run that was only refresh_cache was still returning zero coordinates.
-# - refresh_cache: false → true — the fix. Makes it hit the website instead of replaying disk.
-# - deepen: true → false — no-op today (zero card-only rows meant it already fell through to the search walk).
-# - max_listings_per_category: 10000 → 1 — insurance, only bites if it finds something new.
+
+# Which job this run does. The name selects an overlay file beside this one -
+# `profile: pages` reads `scrape.pages.yaml` - and whatever the overlay sets wins over what is
+# set here. Override it for a single run without editing anything:
+#
+#     python -m aruodas_scraper --profile pages
+#
+#   pages  walk SEARCH pages to find listings that are not in the export yet
+#   pubs   fetch DETAIL pages for listings already held as search cards
+#   all    walk search pages, then spend what is left of the budget on details
+#
+# Precedence, lowest to highest:
+#   command default  <  this file  <  scrape.<profile>.yaml  <  an explicit CLI flag
+#
+# What the overlays actually set, and why it is two settings rather than one: `deepen` decides
+# which phase runs - a run left to deepen skips the search walk entirely while the export still
+# holds card-only rows - and `max_listings_per_category` caps the detail phase, which otherwise
+# eats a budget that both phases share. `refresh_cache` below is a third, orthogonal thing:
+# it decides disk versus origin, and every live mode wants it on. Getting one of the three wrong
+# is silent, which is the reason these live in named files now instead of being edited by hand.
+profile: pubs
 
 
 # Every value is optional. Anything omitted falls back to the command default,
@@ -28,9 +45,10 @@ scrape_live:
   # per-IP budget for a single burst and comfortably inside two cooldowns.
   max_pages: 200
   # Detail pages are the expensive half: one request per listing, for the description,
-  # coordinates, seller and engagement stats that no card carries. This caps only those
-  # fetches - every listing seen in phase A is exported from its card regardless.
-  max_listings_per_category: 1
+  # coordinates, seller and engagement stats that no card carries. It caps only those fetches -
+  # every listing seen in phase A is exported from its card regardless.
+  #
+  # Set by the profile, not here: see scrape.pages.yaml / scrape.pubs.yaml / scrape.all.yaml.
   timeout_seconds: 30.0
 
   # Mean gap between requests; the actual delay is drawn uniformly from
@@ -131,9 +149,11 @@ scrape_live:
   # 404) would keep discovery from ever running again, and every run would spend its requests
   # re-trying corpses.
   #
-  # Skipped when --deepen/--no-deepen is passed explicitly, and when there is no terminal to
-  # ask at, so unattended and CI runs are unaffected.
-  ask_phase: true
+  # Skipped when --deepen/--no-deepen is passed explicitly, when a profile is in force, and
+  # when there is no terminal to ask at, so unattended and CI runs are unaffected. Off here
+  # because `profile` above already answers the question, and answering it twice would let the
+  # prompt quietly overrule the profile the run was started with.
+  ask_phase: false
 
   refresh_cache: true
   # Re-fetch listings that are already in the export instead of skipping them. Left off,
@@ -144,13 +164,15 @@ scrape_live:
   # refresh of prices and listing status.
   overwrite: false
 
-  # Spend the whole run on detail pages for listings the export already holds as search cards,
-  # skipping the search walk entirely - zero requests on pages already harvested. Both phases
-  # draw on one per-IP budget, and the search walk is greedy enough (max_pages x categories)
-  # to consume all of it, which is why rows kept arriving without coordinates. Pass
-  # --no-deepen to spend the budget discovering new listings instead. An export with no
-  # card-only listings falls back to the search walk on its own, so a fresh checkout works.
-  deepen: false
+  # Whether to spend the run on detail pages for listings the export already holds as search
+  # cards, skipping the search walk entirely - zero requests on pages already harvested. Both
+  # phases draw on one per-IP budget, and the search walk is greedy enough (max_pages x
+  # categories) to consume all of it, which is why rows kept arriving without coordinates. An
+  # export with no card-only listings falls back to the search walk on its own, so a fresh
+  # checkout works either way.
+  #
+  # Set by the profile, not here: `pubs` deepens, `pages` and `all` discover. Pass
+  # --deepen/--no-deepen to overrule the profile for one run.
 
   # Identity presented to Aruodas. LEAVE THIS UNSET on the curl transport: the
   # impersonation profile below already supplies a User-Agent that agrees with the TLS

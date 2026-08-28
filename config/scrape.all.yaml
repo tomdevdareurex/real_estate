@@ -1,0 +1,11 @@
+# Profile: all - walk search pages, then spend whatever budget is left on detail pages.
+#
+# Merged over scrape.yaml when `profile: all` is set there or `--profile all` is passed.
+#
+# This is not a third mechanism: it is `pages` with the detail cap lifted. Phase A runs to
+# completion first and both phases share one per-IP request count, so in practice the search
+# walk decides how much is left. Expect it to behave like `pages` on a wide walk and like
+# `pubs` only once max_pages is small enough to leave something over.
+scrape_live:
+  deepen: false
+  max_listings_per_category: 10000
