@@ -1,5 +1,6 @@
 schema_version: 1
 
+
 # Which job this run does. The name selects an overlay file beside this one -
 # `profile: pages` reads `scrape.pages.yaml` - and whatever the overlay sets wins over what is
 # set here. Override it for a single run without editing anything:
@@ -19,7 +20,7 @@ schema_version: 1
 # eats a budget that both phases share. `refresh_cache` below is a third, orthogonal thing:
 # it decides disk versus origin, and every live mode wants it on. Getting one of the three wrong
 # is silent, which is the reason these live in named files now instead of being edited by hand.
-profile: pages
+profile: pubs
 
 
 # Every value is optional. Anything omitted falls back to the command default,
